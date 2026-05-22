@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Focus Flow Analytics</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="admin.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <!-- Chart.js for lightweight charts -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  
+  <div class="ambient-glow"></div>
+
+  <div class="admin-dashboard">
+    <header class="admin-header">
+      <div class="brand">
+        <div class="logo"></div>
+        <span>Focus Flow / Analytics</span>
+      </div>
+      <button class="btn-secondary" onclick="fetchMetrics()"><i class="ph ph-arrows-clockwise"></i> Refresh</button>
+    </header>
+
+    <main class="metrics-grid">
+      <!-- Metric Cards -->
+      <div class="metric-card panel">
+        <div class="metric-title"><i class="ph ph-users"></i> DAU (Daily Active Users)</div>
+        <div class="metric-value" id="val-dau">--</div>
+        <div class="metric-sub">Unique sessions today</div>
+      </div>
+
+      <div class="metric-card panel">
+        <div class="metric-title"><i class="ph ph-check-circle"></i> Onboarding Completion</div>
+        <div class="metric-value" id="val-onboarding">--%</div>
+        <div class="metric-sub">Started vs Joined</div>
+      </div>
+
+      <div class="metric-card panel">
+        <div class="metric-title"><i class="ph ph-target"></i> Focus Completion Rate</div>
+        <div class="metric-value" id="val-focus">--%</div>
+        <div class="metric-sub">Finished full session</div>
+      </div>
+
+      <div class="metric-card panel">
+        <div class="metric-title"><i class="ph ph-clock"></i> Avg Session Duration</div>
+        <div class="metric-value" id="val-duration">--s</div>
+        <div class="metric-sub">Time spent in app</div>
+      </div>
+
+      <!-- Feature Usage Chart -->
+      <div class="chart-container panel" style="grid-column: span 2;">
+        <div class="panel-header">
+          <h3>Feature Usage Breakdown (30 Days)</h3>
+        </div>
+        <canvas id="featureChart"></canvas>
+      </div>
+
+      <!-- Engagement Insights -->
+      <div class="insights-container panel" style="grid-column: span 2;">
+        <div class="panel-header">
+          <h3>AI Coach Engagement</h3>
+        </div>
+        <div class="metric-value" id="val-ai" style="font-size: 2rem;">--</div>
+        <p class="sub-text">Total interactions recorded with the AI Coach.</p>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="admin.js"></script>
+</body>
+</html>

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Focus Flow</title>
+  <link rel="stylesheet" href="style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Phosphor Icons for a clean, modern look -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <!-- Google Identity Services -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+  
+  <!-- Ambient Background Glows -->
+  <div class="ambient-glow"></div>
+  <div class="ambient-glow ai-mode"></div>
+
+  <!-- Onboarding Modal Flow -->
+  <div id="onboarding-overlay" class="overlay active">
+    <div class="modal-card">
+      <div id="onboarding-step-auth" class="step active">
+        <h2 class="gradient-text">Sign In to Focus Flow</h2>
+        <p class="sub-text">Join the ultimate sanctuary for deep work.</p>
+        <div class="auth-buttons" style="margin-top: 24px; display: flex; flex-direction: column; gap: 12px; align-items: center;">
+          <div id="g_id_onload"
+               data-client_id="YOUR_GOOGLE_CLIENT_ID_HERE"
+               data-context="signin"
+               data-ux_mode="popup"
+               data-callback="handleCredentialResponse"
+               data-auto_prompt="false">
+          </div>
+          <div class="g_id_signin"
+               data-type="standard"
+               data-shape="rectangular"
+               data-theme="outline"
+               data-text="signin_with"
+               data-size="large"
+               data-logo_alignment="left">
+          </div>
+          <div class="divider"><span>or</span></div>
+          <form id="email-login-form" style="width: 100%; display: flex; flex-direction: column; gap: 12px;">
+            <input type="email" id="auth-email" placeholder="Email address" required>
+            <input type="password" id="auth-password" placeholder="Password" required>
+            <button type="submit" class="btn-primary" style="width: 100%;">Sign In / Sign Up</button>
+          </form>
+          <p id="auth-error" class="error-text hidden"></p>
+        </div>
+      </div>
+
+      <div id="onboarding-step-1" class="step">
+        <h2 class="gradient-text">Welcome to Focus Flow</h2>
+        <p class="sub-text">Let's set up your profile.</p>
+        <div class="input-group" style="margin-top: 12px;">
+          <label>How should we greet you?</label>
+          <input type="text" id="ob-name" placeholder="e.g. Alex" autocomplete="off" autofocus>
+        </div>
+        <button id="ob-next-1" class="btn-primary">Continue <i class="ph ph-arrow-right"></i></button>
+      </div>
+
+      <div id="onboarding-step-2" class="step">
+        <h2 class="gradient-text">Set Your Intention</h2>
+        <p class="sub-text">A clear goal is the foundation of flow.</p>
+        <div class="input-group" style="margin-top: 12px;">
+          <label>What's your primary focus?</label>
+          <input type="text" id="ob-goal" placeholder="e.g. Finish the Q3 Report" autocomplete="off">
+        </div>
+        <div class="input-group">
+          <label>Join a Room</label>
+          <input type="text" id="ob-room" value="deep-work" autocomplete="off">
+        </div>
+        <button id="ob-join" class="btn-primary">Enter the Zone <i class="ph ph-lightning"></i></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Dashboard -->
+  <div id="app" class="dashboard">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo"></div>
+        <span>Focus Flow</span>
+      </div>
+      <nav>
+        <a href="#" class="active">
+          <i class="ph ph-crosshair"></i> Active Session
+        </a>
+        <a href="#">
+          <i class="ph ph-chart-line-up"></i> Insights <span class="badge">PRO</span>
+        </a>
+        <a href="#">
+          <i class="ph ph-robot"></i> AI Coach
+        </a>
+        <a href="#" id="settings-btn">
+          <i class="ph ph-gear"></i> Settings
+        </a>
+      </nav>
+      <div class="global-stats">
+        <span class="pulse-dot"></span> <span id="global-online-count">1</span> peers online globally
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <header class="topbar">
+        <div class="room-info">
+          <h1 id="room-title">Loading...</h1>
+          <p id="user-goal">Intention: Loading...</p>
+        </div>
+        <div class="topbar-actions">
+          <div class="notification-wrapper">
+            <button id="notif-btn" class="btn-icon">
+              <i class="ph ph-bell"></i>
+              <span id="notif-badge" class="badge-dot hidden"></span>
+            </button>
+            <div id="notif-flyout" class="notification-flyout hidden">
+              <div class="flyout-header">
+                <h3>Notifications</h3>
+                <button id="notif-read-all" class="text-btn">Mark all read</button>
+              </div>
+              <ul id="notif-list" class="flyout-list">
+                <li class="empty-notif">No new notifications</li>
+              </ul>
+            </div>
+          </div>
+          <button id="leave-btn" class="btn-secondary"><i class="ph ph-sign-out"></i> Leave Room</button>
+        </div>
+      </header>
+
+      <div class="room-grid">
+        <!-- Center Focus Area -->
+        <div class="focus-center">
+          <div class="timer-container">
+            <svg class="progress-ring" width="320" height="320">
+              <circle class="progress-ring__bg" stroke-width="4" fill="transparent" r="150" cx="160" cy="160"/>
+              <circle class="progress-ring__circle" stroke-width="4" fill="transparent" r="150" cx="160" cy="160"/>
+            </svg>
+            <div class="timer-content">
+              <h1 id="timer-display">25:00</h1>
+              <p id="timer-status">Ready to Focus</p>
+            </div>
+          </div>
+          
+          <div class="timer-controls">
+            <button id="start-btn" class="btn-primary"><i class="ph ph-play-circle"></i> Start Flow</button>
+            <button id="pause-btn" class="btn-secondary hidden"><i class="ph ph-pause-circle"></i> Pause</button>
+          </div>
+        </div>
+
+        <!-- Right Side: Social & AI -->
+        <div class="right-column">
+          <!-- Participants -->
+          <div class="participants-panel panel">
+            <div class="panel-header">
+              <h3>Peers</h3>
+              <span class="count" id="room-count">0</span>
+            </div>
+            <ul id="participants-list"></ul>
+            <div id="participants-empty" class="empty-state">
+              <i class="ph ph-users icon"></i>
+              <p>It's quiet here. Wait for peers or invite friends.</p>
+            </div>
+          </div>
+
+          <!-- Activity Feed -->
+          <div class="activity-panel panel">
+            <div class="panel-header">
+              <h3>Activity</h3>
+            </div>
+            <div id="feed-container"></div>
+            <div id="feed-empty" class="empty-state">
+              <i class="ph ph-chat-teardrop-dots icon"></i>
+              <p>No activity yet. Break the ice!</p>
+            </div>
+            
+            <div id="typing-indicator" class="typing-text hidden">Someone is typing...</div>
+            <div class="chat-input-wrapper">
+              <input type="text" id="chat-input" placeholder="Encourage a peer..." autocomplete="off">
+              <button id="send-btn"><i class="ph ph-paper-plane-right"></i></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- AI Coach Toast Notifications -->
+  <div id="ai-toast-container"></div>
+
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 class="gradient-text">Profile Settings</h2>
+        <button id="close-settings" class="btn-icon"><i class="ph ph-x"></i></button>
+      </div>
+      <div class="settings-content" style="margin-top: 16px; display: flex; flex-direction: column; gap: 16px;">
+        <div class="avatar-preview-container" style="display: flex; align-items: center; gap: 16px;">
+          <img id="settings-avatar-preview" src="" alt="Avatar" style="width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: #2a2d3e;">
+          <div class="input-group" style="flex: 1;">
+            <label>Avatar URL</label>
+            <input type="text" id="settings-avatar-url" placeholder="https://..." autocomplete="off">
+          </div>
+        </div>
+        <div class="input-group">
+          <label>Username</label>
+          <input type="text" id="settings-username" autocomplete="off">
+        </div>
+        <div class="input-group">
+          <label>Bio</label>
+          <textarea id="settings-bio" rows="3" placeholder="A short bio..."></textarea>
+        </div>
+        <button id="save-settings-btn" class="btn-primary">Save Changes</button>
+        <button id="logout-btn" class="btn-secondary" style="margin-top: 8px;">Log Out</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confetti Canvas -->
+  <canvas id="confetti-canvas"></canvas>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <!-- Canvas Confetti -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+  <!-- Analytics SDK -->
+  <script src="tracker.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
