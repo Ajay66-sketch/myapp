@@ -1,37 +1,30 @@
+// src/socket.js
+// Socket.IO server initialization with guard() pattern
+// All event handlers use centralized guard() for validation
+// Business logic is PURE - no auth checks in handlers
+
 const { Server } = require('socket.io');
 const { createAdapter } = require('@socket.io/redis-adapter');
 const Redis = require('ioredis');
 
-const { authenticateSocket } = require('./socket/middleware/authenticate');
-const {
-  setupSocketAuth,
-  emitAuthError,
-} = require('./socket/utils/eventWrapper');
-const {
-  trackRoomJoin,
-  trackRoomLeave,
-} = require('./socket/middleware/permission');
-const { resetUserRateLimits } = require('./socket/middleware/rateLimit');
-const {
-  CLIENT_EVENTS,
-  SERVER_EVENTS,
-  TOKEN_CHECK_INTERVAL,
-  TOKEN_EXPIRY_WARNING_THRESHOLD,
-  ROOM_REQUIRED_EVENTS,
-} = require('./socket/constants');
-const {
-  isTokenExpiringSoon,
-  getSecondsUntilExpiry,
-} = require('./auth/utils/jwt.utils');
+const auth = require('./socket/auth');
+const { guard } = require('./socket/guard');
+const permissions = require('./socket/permissions');
+const rateLimiter = require('./socket/rateLimiter');
+const config = require('./socket/config');
 
 let io;
 
-// In-memory state managers
+// ─── In-Memory State ────────────────────────────────────────────────────────
+// Note: For production multi-instance deployments, move to Redis
 const onlineUsers = new Map(); // socket.id -> { userId, username, roomId, status }
-const roomsState = new Map(); // roomId -> { timer: { state, remainingTime, duration }, participants: Set }
+const roomsState = new Map(); // roomId -> { timer: {...}, participants: Set }
 
-const TICK_RATE = 1000; // 1 second
+const TICK_RATE = 1000; // Timer synchronization interval
 
+/**
+ * Initialize Socket.IO server with authentication and real-time features
+ */
 const initSocket = (server) => {
   io = new Server(server, {
     cors: {
@@ -41,25 +34,27 @@ const initSocket = (server) => {
     },
   });
 
-  // ─── Socket.IO Authentication Middleware ────────────────────────────────
+  // ─── 1. Authentication Middleware ───────────────────────────────────────
   // Runs during handshake before 'connection' event
-  // Verifies JWT token and rejects unauthorized connections
-  io.use(authenticateSocket);
+  io.use((socket, next) => auth.authenticateSocket(socket, next));
 
-  // Setup Redis Adapter for multi-instance horizontal scaling
+  // ─── 2. Setup Redis Adapter (for multi-instance deployments) ────────────
   try {
     const pubClient = new Redis(process.env.REDIS_URL || {
       host: process.env.REDIS_HOST || 'localhost',
       port: process.env.REDIS_PORT || 6379,
     });
     pubClient.on('error', (err) => {
-      // Suppress connection refused logs in demo mode if Redis is offline
-      if (err.code !== 'ECONNREFUSED') console.error('Redis PubClient Error:', err.message);
+      if (err.code !== 'ECONNREFUSED') {
+        console.error('Redis PubClient Error:', err.message);
+      }
     });
 
     const subClient = pubClient.duplicate();
     subClient.on('error', (err) => {
-      if (err.code !== 'ECONNREFUSED') console.error('Redis SubClient Error:', err.message);
+      if (err.code !== 'ECONNREFUSED') {
+        console.error('Redis SubClient Error:', err.message);
+      }
     });
 
     io.adapter(createAdapter(pubClient, subClient));
@@ -68,19 +63,21 @@ const initSocket = (server) => {
     console.warn('⚠️ Redis not available, Socket.io falling back to in-memory adapter');
   }
 
-  // ─── Central Timer Tick ──────────────────────────────────────────────────
-  // Synchronizes timer state across all connected clients
+  // ─── 3. Timer Tick Broadcast (every 1 second) ──────────────────────────
+  // Synchronizes timer state across all clients in a room
   setInterval(() => {
     roomsState.forEach((room, roomId) => {
       if (room.timer.state === 'running' && room.timer.remainingTime > 0) {
         room.timer.remainingTime -= 1;
-        // Broadcast every second to keep everyone perfectly synced
-        io.to(roomId).emit(SERVER_EVENTS.TIMER_SYNC, room.timer);
+        
+        // Broadcast sync to all users in room
+        io.to(roomId).emit(config.SERVER_EVENTS.TIMER_SYNC, room.timer);
 
+        // Handle completion
         if (room.timer.remainingTime === 0) {
           room.timer.state = 'completed';
-          io.to(roomId).emit(SERVER_EVENTS.TIMER_SYNC, room.timer);
-          io.to(roomId).emit(SERVER_EVENTS.ROOM_ACTIVITY, {
+          io.to(roomId).emit(config.SERVER_EVENTS.TIMER_SYNC, room.timer);
+          io.to(roomId).emit(config.SERVER_EVENTS.ROOM_ACTIVITY, {
             type: 'system',
             message: 'Focus session completed! Great job everyone.',
           });
@@ -89,100 +86,77 @@ const initSocket = (server) => {
     });
   }, TICK_RATE);
 
-  // ─── Token Expiry Check Interval ────────────────────────────────────────
-  // Emits 'auth:expiring' warning when token expires in <5 minutes
-  // Allows client to refresh proactively
-  setInterval(() => {
-    io.sockets.sockets.forEach((socket) => {
-      if (!socket.data || !socket.data.userId) return;
-
-      // Check if token expiring soon
-      if (socket.data.tokenExpiry) {
-        const now = Math.floor(Date.now() / 1000);
-        const timeUntilExpiry = socket.data.tokenExpiry - now;
-        const warningThreshold = TOKEN_EXPIRY_WARNING_THRESHOLD;
-
-        // If token expires in less than warning threshold and hasn't warned yet
-        if (timeUntilExpiry > 0 && timeUntilExpiry <= warningThreshold) {
-          if (!socket.data._expiryWarned) {
-            socket.emit(SERVER_EVENTS.AUTH_EXPIRING, {
-              expiresIn: timeUntilExpiry,
-              action: 'refresh_token',
-            });
-            socket.data._expiryWarned = true;
-          }
-        }
-      }
-    });
-  }, TOKEN_CHECK_INTERVAL);
-
-  // ─── Socket Connection Handler ──────────────────────────────────────────
+  // ─── 4. Connection Handler ─────────────────────────────────────────────
   io.on('connection', (socket) => {
-    console.log(`[Socket.io] Client connected: ${socket.id} (User: ${socket.data.userId})`);
+    const userId = socket.data.userId;
+    console.log(`[Socket.io] Client connected: ${socket.id} (User: ${userId})`);
 
-    // Setup authenticated event handlers
-    setupSocketAuth(socket);
+    // Setup per-socket token expiry monitoring (FIX #5)
+    auth.setupTokenExpiryTimer(socket);
 
-    // Track user in onlineUsers map
+    // Track user in onlineUsers
     onlineUsers.set(socket.id, {
-      userId: socket.data.userId,
+      userId,
       username: socket.data.username || 'User',
       roomId: null,
       status: 'online',
     });
 
-    // Emit success event and global stats
-    socket.emit(SERVER_EVENTS.CONNECT_SUCCESS, {
+    // Emit connection success
+    socket.emit(config.SERVER_EVENTS.CONNECT_SUCCESS, {
       socketId: socket.id,
-      userId: socket.data.userId,
+      userId,
     });
-    io.emit(SERVER_EVENTS.GLOBAL_STATS, { onlineCount: onlineUsers.size });
+    io.emit(config.SERVER_EVENTS.GLOBAL_STATS, { onlineCount: onlineUsers.size });
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Re-authentication Handler (for token refresh)
-    // Client sends new token after refresh
-    // ─────────────────────────────────────────────────────────────────────
-    socket.onAuth(CLIENT_EVENTS.SOCKET_REAUTH, function (data, ack) {
-      const { token } = data;
+    // ═══════════════════════════════════════════════════════════════════════
+    // EVENT HANDLERS - All use guard() pattern
+    // ═══════════════════════════════════════════════════════════════════════
 
-      if (!token) {
-        return ack?.({
-          error: 'No token provided',
-        });
-      }
+    // ─── RE-AUTHENTICATION: Handle token refresh ──────────────────────────
+    socket.on(config.CLIENT_EVENTS.SOCKET_REAUTH, (data, ack) => {
+      guard(socket, config.CLIENT_EVENTS.SOCKET_REAUTH, data, ack, async () => {
+        // PURE BUSINESS LOGIC - guard() handled all validation
+        const newToken = data?.token;
+        const decoded = auth.verifyToken(newToken, process.env.JWT_SECRET);
 
-      // In production, verify token here
-      // For now, trust the auth middleware validation
-      socket.data._expiryWarned = false; // Reset expiry warning
-
-      ack?.({ success: true });
-    });
-
-    // ─────────────────────────────────────────────────────────────────────
-    // Room Join Handler
-    // ─────────────────────────────────────────────────────────────────────
-    socket.onAuth(
-      CLIENT_EVENTS.ROOM_JOIN,
-      function (data, ack) {
-        const { roomId } = data;
-
-        if (!roomId) {
-          return ack?.({ error: 'Room ID required' });
+        if (!decoded) {
+          throw { code: 'INVALID_TOKEN' };
         }
 
-        // Leave previous room if in one
+        // FIX #4: Verify user identity hasn't changed
+        if (decoded.sub !== socket.data.userId) {
+          throw { code: 'PERMISSION_DENIED' };
+        }
+
+        // Update socket data with new expiry
+        socket.data.tokenExpiry = decoded.exp * 1000;
+
+        // Reset expiry timer with new timeout
+        auth.clearTokenExpiryTimer(socket);
+        auth.setupTokenExpiryTimer(socket);
+
+        ack?.({ success: true });
+      });
+    });
+
+    // ─── ROOM: Join room ───────────────────────────────────────────────────
+    socket.on(config.CLIENT_EVENTS.ROOM_JOIN, (data, ack) => {
+      guard(socket, config.CLIENT_EVENTS.ROOM_JOIN, data, ack, async () => {
+        // PURE BUSINESS LOGIC
+        const roomId = data.roomId;
         const user = onlineUsers.get(socket.id);
+
+        // Leave previous room if in one
         if (user?.roomId) {
           const oldRoom = roomsState.get(user.roomId);
           if (oldRoom) {
             oldRoom.participants.delete(socket.id);
-            socket.leave(user.roomId);
-
-            // Notify others
-            socket.to(user.roomId).emit(SERVER_EVENTS.ROOM_USER_LEFT, {
+            socket.leave(`room:${user.roomId}`);
+            socket.to(`room:${user.roomId}`).emit(config.SERVER_EVENTS.ROOM_USER_LEFT, {
               socketId: socket.id,
             });
-            socket.to(user.roomId).emit(SERVER_EVENTS.ROOM_ACTIVITY, {
+            socket.to(`room:${user.roomId}`).emit(config.SERVER_EVENTS.ROOM_ACTIVITY, {
               type: 'system',
               message: `${user.username} left the focus room.`,
             });
@@ -190,9 +164,9 @@ const initSocket = (server) => {
         }
 
         // Join new room
-        socket.join(roomId);
+        socket.join(`room:${roomId}`);
         user.roomId = roomId;
-        trackRoomJoin(socket, roomId);
+        permissions.trackRoomJoin(socket, roomId);
         onlineUsers.set(socket.id, user);
 
         // Initialize room state if not exists
@@ -211,7 +185,7 @@ const initSocket = (server) => {
         room.participants.add(socket.id);
 
         // Send room state to joined user
-        socket.emit(SERVER_EVENTS.ROOM_STATE, {
+        socket.emit(config.SERVER_EVENTS.ROOM_STATE, {
           timer: room.timer,
           participants: Array.from(room.participants).map((id) => ({
             socketId: id,
@@ -220,17 +194,17 @@ const initSocket = (server) => {
         });
 
         // Notify others in room
-        socket.to(roomId).emit(SERVER_EVENTS.ROOM_USER_JOINED, {
+        socket.to(`room:${roomId}`).emit(config.SERVER_EVENTS.ROOM_USER_JOINED, {
           socketId: socket.id,
           user,
         });
-        socket.to(roomId).emit(SERVER_EVENTS.ROOM_ACTIVITY, {
+        socket.to(`room:${roomId}`).emit(config.SERVER_EVENTS.ROOM_ACTIVITY, {
           type: 'system',
           message: `${user.username} joined the focus room.`,
         });
 
         // Social notification
-        socket.to(roomId).emit(SERVER_EVENTS.NOTIFICATION_RECEIVED, {
+        socket.to(`room:${roomId}`).emit(config.SERVER_EVENTS.NOTIFICATION_RECEIVED, {
           _id: Date.now().toString(),
           type: 'social',
           title: 'Peer Joined',
@@ -239,123 +213,103 @@ const initSocket = (server) => {
         });
 
         ack?.({ success: true, roomId });
-      },
-      { requireRoom: false }
-    );
+      });
+    });
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Timer Controls
-    // ─────────────────────────────────────────────────────────────────────
-    socket.onAuth(
-      CLIENT_EVENTS.TIMER_START,
-      function (data, ack) {
-        const { roomId, duration } = data;
-
-        if (!roomId || !duration) {
-          return ack?.({ error: 'Room ID and duration required' });
-        }
-
+    // ─── TIMER: Start timer ────────────────────────────────────────────────
+    socket.on(config.CLIENT_EVENTS.TIMER_START, (data, ack) => {
+      guard(socket, config.CLIENT_EVENTS.TIMER_START, data, ack, async () => {
+        // PURE BUSINESS LOGIC - guard() verified room membership
+        const roomId = data.roomId;
+        const duration = data.duration;
         const room = roomsState.get(roomId);
-        if (room) {
-          room.timer = {
-            state: 'running',
-            duration,
-            remainingTime: duration,
-          };
-          io.to(roomId).emit(SERVER_EVENTS.TIMER_SYNC, room.timer);
 
-          const user = onlineUsers.get(socket.id);
-          io.to(roomId).emit(SERVER_EVENTS.ROOM_ACTIVITY, {
-            type: 'system',
-            message: `${user?.username} started a ${duration / 60}-minute focus session.`,
-          });
-
-          ack?.({ success: true });
-        } else {
-          ack?.({ error: 'Room not found' });
-        }
-      },
-      { requireRoom: true }
-    );
-
-    socket.onAuth(
-      CLIENT_EVENTS.TIMER_PAUSE,
-      function (data, ack) {
-        const { roomId } = data;
-
-        if (!roomId) {
-          return ack?.({ error: 'Room ID required' });
+        if (!room) {
+          throw { code: 'PERMISSION_DENIED', message: 'Room not found' };
         }
 
-        const room = roomsState.get(roomId);
-        if (room && room.timer.state === 'running') {
-          room.timer.state = 'paused';
-          io.to(roomId).emit(SERVER_EVENTS.TIMER_SYNC, room.timer);
-          ack?.({ success: true });
-        } else {
-          ack?.({ error: 'Cannot pause timer' });
-        }
-      },
-      { requireRoom: true }
-    );
+        room.timer = {
+          state: 'running',
+          duration,
+          remainingTime: duration,
+        };
 
-    socket.onAuth(
-      CLIENT_EVENTS.TIMER_RESUME,
-      function (data, ack) {
-        const { roomId } = data;
-
-        if (!roomId) {
-          return ack?.({ error: 'Room ID required' });
-        }
-
-        const room = roomsState.get(roomId);
-        if (room && room.timer.state === 'paused') {
-          room.timer.state = 'running';
-          io.to(roomId).emit(SERVER_EVENTS.TIMER_SYNC, room.timer);
-          ack?.({ success: true });
-        } else {
-          ack?.({ error: 'Cannot resume timer' });
-        }
-      },
-      { requireRoom: true }
-    );
-
-    socket.onAuth(
-      CLIENT_EVENTS.TIMER_CANCEL,
-      function (data, ack) {
-        const { roomId } = data;
-
-        if (!roomId) {
-          return ack?.({ error: 'Room ID required' });
-        }
-
-        const room = roomsState.get(roomId);
-        if (room) {
-          room.timer.state = 'idle';
-          room.timer.remainingTime = room.timer.duration;
-          io.to(roomId).emit(SERVER_EVENTS.TIMER_SYNC, room.timer);
-          ack?.({ success: true });
-        } else {
-          ack?.({ error: 'Room not found' });
-        }
-      },
-      { requireRoom: true }
-    );
-
-    // ─────────────────────────────────────────────────────────────────────
-    // Chat and Activity
-    // ─────────────────────────────────────────────────────────────────────
-    socket.onAuth(
-      CLIENT_EVENTS.ROOM_CHAT,
-      function (data, ack) {
-        const { roomId, message } = data;
-
-        if (!roomId || !message) {
-          return ack?.({ error: 'Room ID and message required' });
-        }
+        io.to(`room:${roomId}`).emit(config.SERVER_EVENTS.TIMER_SYNC, room.timer);
 
         const user = onlineUsers.get(socket.id);
-        io.to(roomId).emit(SERVER_EVENTS.ROOM_ACTIVITY, {
+        io.to(`room:${roomId}`).emit(config.SERVER_EVENTS.ROOM_ACTIVITY, {
+          type: 'system',
+          message: `${user?.username} started a ${duration / 60}-minute focus session.`,
+        });
+
+        ack?.({ success: true });
+      });
+    });
+
+    // ─── TIMER: Pause timer ───────────────────────────────────────────────
+    socket.on(config.CLIENT_EVENTS.TIMER_PAUSE, (data, ack) => {
+      guard(socket, config.CLIENT_EVENTS.TIMER_PAUSE, data, ack, async () => {
+        // PURE BUSINESS LOGIC - guard() verified room membership
+        const roomId = data.roomId;
+        const room = roomsState.get(roomId);
+
+        if (!room || room.timer.state !== 'running') {
+          throw { code: 'PERMISSION_DENIED', message: 'Cannot pause timer' };
+        }
+
+        room.timer.state = 'paused';
+        io.to(`room:${roomId}`).emit(config.SERVER_EVENTS.TIMER_SYNC, room.timer);
+
+        ack?.({ success: true });
+      });
+    });
+
+    // ─── TIMER: Resume timer ──────────────────────────────────────────────
+    socket.on(config.CLIENT_EVENTS.TIMER_RESUME, (data, ack) => {
+      guard(socket, config.CLIENT_EVENTS.TIMER_RESUME, data, ack, async () => {
+        // PURE BUSINESS LOGIC - guard() verified room membership
+        const roomId = data.roomId;
+        const room = roomsState.get(roomId);
+
+        if (!room || room.timer.state !== 'paused') {
+          throw { code: 'PERMISSION_DENIED', message: 'Cannot resume timer' };
+        }
+
+        room.timer.state = 'running';
+        io.to(`room:${roomId}`).emit(config.SERVER_EVENTS.TIMER_SYNC, room.timer);
+
+        ack?.({ success: true });
+      });
+    });
+
+    // ─── TIMER: Cancel timer ──────────────────────────────────────────────
+    socket.on(config.CLIENT_EVENTS.TIMER_CANCEL, (data, ack) => {
+      guard(socket, config.CLIENT_EVENTS.TIMER_CANCEL, data, ack, async () => {
+        // PURE BUSINESS LOGIC - guard() verified room membership
+        const roomId = data.roomId;
+        const room = roomsState.get(roomId);
+
+        if (!room) {
+          throw { code: 'PERMISSION_DENIED', message: 'Room not found' };
+        }
+
+        room.timer.state = 'idle';
+        room.timer.remainingTime = room.timer.duration;
+        io.to(`room:${roomId}`).emit(config.SERVER_EVENTS.TIMER_SYNC, room.timer);
+
+        ack?.({ success: true });
+      });
+    });
+
+    // ─── CHAT: Send message ───────────────────────────────────────────────
+    socket.on(config.CLIENT_EVENTS.ROOM_CHAT, (data, ack) => {
+      guard(socket, config.CLIENT_EVENTS.ROOM_CHAT, data, ack, async () => {
+        // PURE BUSINESS LOGIC - guard() verified room membership
+        const roomId = data.roomId;
+        const message = data.message;
+        const user = onlineUsers.get(socket.id);
+
+        io.to(`room:${roomId}`).emit(config.SERVER_EVENTS.ROOM_ACTIVITY, {
           type: 'chat',
           userId: socket.data.userId,
           username: user.username,
@@ -363,34 +317,30 @@ const initSocket = (server) => {
         });
 
         ack?.({ success: true });
-      },
-      { requireRoom: true }
-    );
+      });
+    });
 
-    socket.onAuth(
-      CLIENT_EVENTS.ROOM_TYPING,
-      function (data, ack) {
-        const { roomId, isTyping } = data;
-
-        if (!roomId) {
-          return ack?.({ error: 'Room ID required' });
-        }
-
+    // ─── TYPING: Typing indicator ──────────────────────────────────────────
+    socket.on(config.CLIENT_EVENTS.ROOM_TYPING, (data, ack) => {
+      guard(socket, config.CLIENT_EVENTS.ROOM_TYPING, data, ack, async () => {
+        // PURE BUSINESS LOGIC - guard() verified room membership
+        const roomId = data.roomId;
+        const isTyping = data.isTyping;
         const user = onlineUsers.get(socket.id);
-        socket.to(roomId).emit(SERVER_EVENTS.ROOM_TYPING, {
+
+        socket.to(`room:${roomId}`).emit(config.SERVER_EVENTS.ROOM_TYPING, {
           userId: socket.data.userId,
           username: user.username,
           isTyping,
         });
 
         ack?.({ success: true });
-      },
-      { requireRoom: true }
-    );
+      });
+    });
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Disconnect Handler
-    // ─────────────────────────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════════
+    // DISCONNECT HANDLER - Cleanup
+    // ═══════════════════════════════════════════════════════════════════════
     socket.on('disconnect', () => {
       const user = onlineUsers.get(socket.id);
 
@@ -398,10 +348,10 @@ const initSocket = (server) => {
         const room = roomsState.get(user.roomId);
         if (room) {
           room.participants.delete(socket.id);
-          socket.to(user.roomId).emit(SERVER_EVENTS.ROOM_USER_LEFT, {
+          socket.to(`room:${user.roomId}`).emit(config.SERVER_EVENTS.ROOM_USER_LEFT, {
             socketId: socket.id,
           });
-          socket.to(user.roomId).emit(SERVER_EVENTS.ROOM_ACTIVITY, {
+          socket.to(`room:${user.roomId}`).emit(config.SERVER_EVENTS.ROOM_ACTIVITY, {
             type: 'system',
             message: `${user.username} disconnected.`,
           });
@@ -412,22 +362,23 @@ const initSocket = (server) => {
           }
         }
 
-        trackRoomLeave(socket, user.roomId);
+        permissions.trackRoomLeave(socket, user.roomId);
       }
 
-      // Cleanup user data
-      onlineUsers.delete(socket.id);
-      resetUserRateLimits(socket.data.userId);
+      // Cleanup rate limits and timers
+      rateLimiter.resetUserLimits(socket.data.userId);
+      auth.clearTokenExpiryTimer(socket);
 
-      io.emit(SERVER_EVENTS.GLOBAL_STATS, { onlineCount: onlineUsers.size });
+      // Cleanup user tracking
+      onlineUsers.delete(socket.id);
+
+      io.emit(config.SERVER_EVENTS.GLOBAL_STATS, { onlineCount: onlineUsers.size });
       console.log(
         `[Socket.io] Client disconnected: ${socket.id} (User: ${socket.data.userId})`
       );
     });
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Error Handler
-    // ─────────────────────────────────────────────────────────────────────
+    // Error handler
     socket.on('error', (error) => {
       console.error(`[Socket.io Error] ${socket.id}:`, error);
     });
@@ -436,6 +387,9 @@ const initSocket = (server) => {
   return io;
 };
 
+/**
+ * Get Socket.IO instance (must call initSocket first)
+ */
 const getIO = () => {
   if (!io) {
     throw new Error('Socket.io is not initialized!');
