@@ -22,6 +22,9 @@ const config = require('./config');
  * @param {function} ack - Acknowledgement callback (optional)
  * @param {function} handler - Async handler (business logic only)
  */
+const { findUserById } = require('../utils/authStore');
+const { getPlan } = require('../utils/permissions');
+
 async function guard(socket, eventName, data, ack, handler) {
   try {
     // 1. Authentication check
@@ -31,9 +34,52 @@ async function guard(socket, eventName, data, ack, handler) {
       return ack?.(error) || socket.emit('error', error);
     }
 
-    // 2. Rate limit check
+    // 1.5 Payload Validation check
     // ────────────────────────────────────────────────────────────────────────
-    const limit = rateLimiter.checkRateLimit(socket.data.userId, eventName);
+    const { 
+      roomJoinSchema, 
+      timerStartSchema, 
+      roomCommandSchema,
+      validate 
+    } = require('../validation/schemas');
+
+    let schemaToUse = null;
+    if (eventName === 'room:join' || eventName === 'room:chat' || eventName === 'room:typing') {
+      schemaToUse = roomJoinSchema;
+    } else if (eventName === 'timer:start') {
+      schemaToUse = timerStartSchema;
+    } else if (eventName === 'timer:pause' || eventName === 'timer:resume' || eventName === 'timer:cancel') {
+      schemaToUse = roomCommandSchema;
+    }
+
+    if (schemaToUse) {
+      try {
+        validate(schemaToUse, data, `Socket:${eventName}`);
+      } catch (err) {
+        const error = {
+          ...config.ERRORS.INVALID_PAYLOAD,
+          message: err.message,
+        };
+        return ack?.(error) || socket.emit('error', error);
+      }
+    }
+
+    // Load up-to-date user to ensure real-time plan status and rate limits are respected
+    const user = await findUserById(socket.data.userId) || { _id: socket.data.userId, tier: 'free' };
+    const plan = getPlan(user);
+
+    // ─── Socket Priority & Priority Queue Architectural Hooks ───────────────
+    socket.priority = plan.socketPriority || 0;
+    
+    // Future Queue processing placeholder hook:
+    // Pushes messages to higher-priority Redis queues when multi-node scaling is active
+    if (plan.socketPriority > 0) {
+      // Hook: queue.processPrioritySocketMessage(socket.data.userId, eventName, data);
+    }
+
+    // 2. Rate limit check (using dynamic plan-based limits)
+    // ────────────────────────────────────────────────────────────────────────
+    const limit = await rateLimiter.checkRateLimit(user, eventName);
     if (!limit.allowed) {
       // FIX #1: Don't mutate config.ERRORS - create new object with spread
       const error = {

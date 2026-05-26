@@ -57,11 +57,47 @@ const userSchema = new mongoose.Schema(
     },
     tier: {
       type: String,
-      enum: ['free', 'premium'],
+      enum: ['free', 'pro', 'admin', 'premium'],
       default: 'free',
     },
     stripeCustomerId: {
       type: String,
+    },
+    xp: {
+      type: Number,
+      default: 0,
+    },
+    level: {
+      type: Number,
+      default: 1,
+    },
+    badges: {
+      type: [String],
+      default: [],
+    },
+    streakFreezeCount: {
+      type: Number,
+      default: 0,
+    },
+    achievements: {
+      type: [String],
+      default: [],
+    },
+    friends: {
+      type: [String],
+      default: [],
+    },
+    friendRequestsSent: {
+      type: [String],
+      default: [],
+    },
+    friendRequestsReceived: {
+      type: [String],
+      default: [],
+    },
+    blockedUsers: {
+      type: [String],
+      default: [],
     },
     stats: {
       currentStreak: { type: Number, default: 0 },
@@ -109,6 +145,15 @@ userSchema.methods.toSafeObject = function () {
     onboardingCompleted: this.onboardingCompleted,
     isOnline: this.isOnline,
     tier: this.tier,
+    xp: this.xp,
+    level: this.level,
+    badges: this.badges,
+    streakFreezeCount: this.streakFreezeCount,
+    achievements: this.achievements,
+    friends: this.friends,
+    friendRequestsSent: this.friendRequestsSent,
+    friendRequestsReceived: this.friendRequestsReceived,
+    blockedUsers: this.blockedUsers,
     stats: this.stats,
     preferences: this.preferences,
     createdAt: this.createdAt,

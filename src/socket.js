@@ -6,21 +6,49 @@
 const { Server } = require('socket.io');
 const { createAdapter } = require('@socket.io/redis-adapter');
 const Redis = require('ioredis');
+const { createRedisClient } = require('./config/redisClient');
 
 const auth = require('./socket/auth');
+const env = require('./config/env');
+const status = require('./config/status');
 const { guard } = require('./socket/guard');
 const permissions = require('./socket/permissions');
 const rateLimiter = require('./socket/rateLimiter');
 const config = require('./socket/config');
 
+const monetizationPermissions = require('./utils/permissions');
+const roomStore = require('./utils/roomStore');
+const { findUserById } = require('./utils/authStore');
+const { sanitizeMessage } = require('./utils/sanitizer');
+const { logAuditEvent } = require('./utils/auditLogger');
+const notificationService = require('./services/notificationService');
+
+const presenceService = require('./socket/presence/presenceService');
+const timerController = require('./socket/timer/timerController');
+
+// Bootstrap services (event-driven wiring)
+require('./socket/ai/tutorService');
+require('./socket/xp/xpService');
+require('./socket/notifications/notificationService');
+require('./socket/telemetry/eventBus');
+
+const { onlineUsers, roomsState, onlineUsersByUserId, activeTypingUsers } = presenceService;
+
+const isVercel = Boolean(process.env.VERCEL);
 let io;
+let redisClientInstance = null;
 
-// ─── In-Memory State ────────────────────────────────────────────────────────
-// Note: For production multi-instance deployments, move to Redis
-const onlineUsers = new Map(); // socket.id -> { userId, username, roomId, status }
-const roomsState = new Map(); // roomId -> { timer: {...}, participants: Set }
-
-const TICK_RATE = 1000; // Timer synchronization interval
+const buildChatMessage = ({ userId, username, message, room = 'global' }) => ({
+  id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+  type: 'chat_message',
+  room,
+  message,
+  user: {
+    userId,
+    username,
+  },
+  timestamp: Date.now(),
+});
 
 /**
  * Initialize Socket.IO server with authentication and real-time features
@@ -28,10 +56,24 @@ const TICK_RATE = 1000; // Timer synchronization interval
 const initSocket = (server) => {
   io = new Server(server, {
     cors: {
-      origin: process.env.CLIENT_URL || '*',
+      origin: env.getSocketOrigin(),
       methods: ['GET', 'POST'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
       credentials: true,
     },
+    transports: ['websocket', 'polling'],
+  });
+
+  console.log('Socket.IO transport configured: websocket + polling');
+  status.setSocketLoaded();
+  notificationService.setIoInstance(io);
+
+  // Stream all telemetry events to admin:telemetry subscribers
+  const eventBus = require('./telemetry/eventBus');
+  eventBus.subscribe((event) => {
+    if (io) {
+      io.to('admin:telemetry').emit('admin:telemetry:event', event);
+    }
   });
 
   // ─── 1. Authentication Middleware ───────────────────────────────────────
@@ -39,100 +81,215 @@ const initSocket = (server) => {
   io.use((socket, next) => auth.authenticateSocket(socket, next));
 
   // ─── 2. Setup Redis Adapter (for multi-instance deployments) ────────────
-  try {
-    const pubClient = new Redis(process.env.REDIS_URL || {
-      host: process.env.REDIS_HOST || 'localhost',
-      port: process.env.REDIS_PORT || 6379,
-    });
-    pubClient.on('error', (err) => {
-      if (err.code !== 'ECONNREFUSED') {
-        console.error('Redis PubClient Error:', err.message);
-      }
-    });
+  if (isVercel) {
+    status.setRedisConnected(false);
+    console.log('   [Redis] Vercel mode: distributed adapter disabled for stateless Socket.IO');
+  } else {
+    const hasRedisConfig = Boolean(
+      process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDIS_PORT || process.env.REDIS_MODE
+    );
 
-    const subClient = pubClient.duplicate();
-    subClient.on('error', (err) => {
-      if (err.code !== 'ECONNREFUSED') {
-        console.error('Redis SubClient Error:', err.message);
-      }
-    });
+    if (hasRedisConfig) {
+      try {
+        const pubClient = createRedisClient();
+        redisClientInstance = pubClient;
+        const DistributedLock = require('./core/distributedLock');
+        DistributedLock.setRedisClient(pubClient);
 
-    io.adapter(createAdapter(pubClient, subClient));
-    console.log('✅ Socket.io Redis Adapter configured');
-  } catch (err) {
-    console.warn('⚠️ Redis not available, Socket.io falling back to in-memory adapter');
+        pubClient.on('error', (err) => {
+          if (err.code === 'ECONNREFUSED') {
+            console.log('   [Redis] Optional dependency unavailable - continuing in single-node mode');
+            status.setRedisConnected(false);
+            return;
+          }
+          console.error('   [Redis] PubClient Error:', err.message);
+        });
+
+        pubClient.on('ready', () => {
+          status.setRedisConnected(true);
+          console.log('   ✅ Redis connected, Socket.IO adapter configured');
+        });
+
+        const subClient = createRedisClient();
+        subClient.on('error', (err) => {
+          if (err.code === 'ECONNREFUSED') {
+            return;
+          }
+          console.error('   [Redis] SubClient Error:', err.message);
+        });
+
+        io.adapter(createAdapter(pubClient, subClient));
+      } catch (err) {
+        console.log('   [Redis] Initialization skipped - running in-memory Socket.IO mode');
+        status.setRedisConnected(false);
+      }
+    } else {
+      console.log('   [Redis] Not configured - running in-memory Socket.IO mode');
+      status.setRedisConnected(false);
+    }
   }
 
-  // ─── 3. Timer Tick Broadcast (every 1 second) ──────────────────────────
-  // Synchronizes timer state across all clients in a room
+  // ─── 3.5 Presence Heartbeat Sweep (every 10 seconds) ────────────────────
+  // Detects stale user sockets and prunes inactive connections
   setInterval(() => {
-    roomsState.forEach((room, roomId) => {
-      if (room.timer.state === 'running' && room.timer.remainingTime > 0) {
-        room.timer.remainingTime -= 1;
+    const now = Date.now();
+    const timeoutLimit = 30000; // 30 seconds stale timeout limit
+    
+    onlineUsers.forEach((user, socketId) => {
+      if (user.lastSeen && now - user.lastSeen > timeoutLimit) {
+        console.warn(`[Presence Sweep] Stale socket detected: ${socketId} (User: ${user.userId}). Pruning.`);
         
-        // Broadcast sync to all users in room
-        io.to(roomId).emit(config.SERVER_EVENTS.TIMER_SYNC, room.timer);
+        // Audit presence disconnect
+        logAuditEvent({
+          action: 'presence_disconnect',
+          userId: user.userId,
+          resource: `socket:${socketId}`,
+          success: true,
+          metadata: { reason: 'stale_heartbeat_timeout' },
+        });
 
-        // Handle completion
-        if (room.timer.remainingTime === 0) {
-          room.timer.state = 'completed';
-          io.to(roomId).emit(config.SERVER_EVENTS.TIMER_SYNC, room.timer);
-          io.to(roomId).emit(config.SERVER_EVENTS.ROOM_ACTIVITY, {
-            type: 'system',
-            message: 'Focus session completed! Great job everyone.',
-          });
+        const staleSocket = io.sockets.sockets.get(socketId);
+        if (staleSocket) {
+          staleSocket.disconnect(true);
+        } else {
+          // Fallback manual cleanup
+          onlineUsers.delete(socketId);
+          const stillOnline = Array.from(onlineUsers.values()).some((u) => u.userId === user.userId);
+          if (!stillOnline) {
+            onlineUsersByUserId.delete(user.userId);
+          }
+          io.emit(config.SERVER_EVENTS.GLOBAL_STATS, { onlineCount: onlineUsers.size });
+          const onlineUsersList = Array.from(onlineUsersByUserId.values());
+          io.to('global').emit(config.SERVER_EVENTS.CHAT_ONLINE_USERS, onlineUsersList);
         }
       }
     });
-  }, TICK_RATE);
+  }, 10000);
 
   // ─── 4. Connection Handler ─────────────────────────────────────────────
   io.on('connection', (socket) => {
     const userId = socket.data.userId;
+    const username = socket.data.username || 'User';
+    socket.user = {
+      userId,
+      username,
+    };
+
     console.log(`[Socket.io] Client connected: ${socket.id} (User: ${userId})`);
 
-    // Setup per-socket token expiry monitoring (FIX #5)
+    // Auto-join the global chat room for all authenticated clients
+    socket.join('global');
+    socket.data.rooms.add('global');
+    socket.join(userId.toString()); // Join user's private notification channel
+
+    // Setup per-socket token expiry monitoring
     auth.setupTokenExpiryTimer(socket);
+
+    const eventBusInstance = require('./telemetry/eventBus');
+    eventBusInstance.emit('socket:connect', 'info', { socketId: socket.id, username }, userId);
+
+    // Live Observability: Track all incoming and outgoing WebSocket events and active counts
+    socket.onAny((event) => {
+      status.recordSocketEventReceived();
+      eventBusInstance.emit('socket:incoming', 'info', { socketId: socket.id, event }, userId);
+    });
+    socket.onAnyOutgoing((event) => {
+      status.recordSocketEventSent();
+      eventBusInstance.emit('socket:outgoing', 'info', { socketId: socket.id, event }, userId);
+    });
 
     // Track user in onlineUsers
     onlineUsers.set(socket.id, {
       userId,
-      username: socket.data.username || 'User',
+      username,
       roomId: null,
       status: 'online',
+      lastSeen: Date.now(), // initialize presence heartbeat
     });
+
+    status.recordSocketConnect(onlineUsers.size);
+
+    // Track user in onlineUsersByUserId for presence
+    onlineUsersByUserId.set(userId, { userId, username });
 
     // Emit connection success
     socket.emit(config.SERVER_EVENTS.CONNECT_SUCCESS, {
       socketId: socket.id,
       userId,
     });
-    io.emit(config.SERVER_EVENTS.GLOBAL_STATS, { onlineCount: onlineUsers.size });
+
+    // ─── Distributed Redis Presence Tracker ─────────────────────────────────
+    (async () => {
+      let onlineCount = onlineUsers.size;
+      if (redisClientInstance && redisClientInstance.status === 'ready') {
+        try {
+          await redisClientInstance.sadd('redis:online_users', userId.toString());
+          onlineCount = await redisClientInstance.scard('redis:online_users');
+        } catch (err) {
+          // Fallback silently
+        }
+      }
+      io.emit(config.SERVER_EVENTS.GLOBAL_STATS, { onlineCount });
+    })();
+
+    // Broadcast updated online users list to global room
+    const onlineUsersList = Array.from(onlineUsersByUserId.values());
+    io.to('global').emit(config.SERVER_EVENTS.CHAT_ONLINE_USERS, onlineUsersList);
 
     // ═══════════════════════════════════════════════════════════════════════
     // EVENT HANDLERS - All use guard() pattern
     // ═══════════════════════════════════════════════════════════════════════
 
+    // ─── ADMIN TELEMETRY: Subscribe to real-time events stream ─────────────
+    socket.on('admin:telemetry:subscribe', async (data, ack) => {
+      try {
+        if (!socket.data?.userId) {
+          const error = { code: 'NO_TOKEN', message: 'Authentication required' };
+          return ack?.(error) || socket.emit('error', error);
+        }
+
+        const { findUserById } = require('./utils/authStore');
+        const user = await findUserById(socket.data.userId);
+        
+        if (!user || user.tier !== 'admin') {
+          const error = { code: 'PERMISSION_DENIED', message: 'Admin access required for telemetry stream' };
+          return ack?.(error) || socket.emit('error', error);
+        }
+
+        socket.join('admin:telemetry');
+        
+        const eventBusObj = require('./telemetry/eventBus');
+        eventBusObj.emit('telemetry:subscribed', 'info', { socketId: socket.id, username: user.username }, user._id);
+
+        ack?.({ success: true, message: 'Subscribed to telemetry stream' });
+      } catch (err) {
+        const error = { code: 'INTERNAL_ERROR', message: err.message };
+        ack?.(error) || socket.emit('error', error);
+      }
+    });
+
     // ─── RE-AUTHENTICATION: Handle token refresh ──────────────────────────
     socket.on(config.CLIENT_EVENTS.SOCKET_REAUTH, (data, ack) => {
       guard(socket, config.CLIENT_EVENTS.SOCKET_REAUTH, data, ack, async () => {
-        // PURE BUSINESS LOGIC - guard() handled all validation
         const newToken = data?.token;
-        const decoded = auth.verifyToken(newToken, process.env.JWT_SECRET);
+        const tokenValidation = auth.verifyToken(newToken, env.getJwtSecret());
 
-        if (!decoded) {
+        if (tokenValidation.error) {
           throw { code: 'INVALID_TOKEN' };
         }
 
-        // FIX #4: Verify user identity hasn't changed
+        const decoded = tokenValidation.decoded;
+
         if (decoded.sub !== socket.data.userId) {
           throw { code: 'PERMISSION_DENIED' };
         }
 
-        // Update socket data with new expiry
+        if (decoded.tokenType !== 'access') {
+          throw { code: 'INVALID_TOKEN' };
+        }
+
         socket.data.tokenExpiry = decoded.exp * 1000;
 
-        // Reset expiry timer with new timeout
         auth.clearTokenExpiryTimer(socket);
         auth.setupTokenExpiryTimer(socket);
 
@@ -143,187 +300,211 @@ const initSocket = (server) => {
     // ─── ROOM: Join room ───────────────────────────────────────────────────
     socket.on(config.CLIENT_EVENTS.ROOM_JOIN, (data, ack) => {
       guard(socket, config.CLIENT_EVENTS.ROOM_JOIN, data, ack, async () => {
-        // PURE BUSINESS LOGIC
-        const roomId = data.roomId;
-        const user = onlineUsers.get(socket.id);
-
-        // Leave previous room if in one
-        if (user?.roomId) {
-          const oldRoom = roomsState.get(user.roomId);
-          if (oldRoom) {
-            oldRoom.participants.delete(socket.id);
-            socket.leave(`room:${user.roomId}`);
-            socket.to(`room:${user.roomId}`).emit(config.SERVER_EVENTS.ROOM_USER_LEFT, {
-              socketId: socket.id,
-            });
-            socket.to(`room:${user.roomId}`).emit(config.SERVER_EVENTS.ROOM_ACTIVITY, {
-              type: 'system',
-              message: `${user.username} left the focus room.`,
-            });
-          }
-        }
-
-        // Join new room
-        socket.join(`room:${roomId}`);
-        user.roomId = roomId;
-        permissions.trackRoomJoin(socket, roomId);
-        onlineUsers.set(socket.id, user);
-
-        // Initialize room state if not exists
-        if (!roomsState.has(roomId)) {
-          roomsState.set(roomId, {
-            timer: {
-              state: 'idle',
-              remainingTime: 25 * 60,
-              duration: 25 * 60,
-            },
-            participants: new Set(),
-          });
-        }
-
-        const room = roomsState.get(roomId);
-        room.participants.add(socket.id);
-
-        // Send room state to joined user
-        socket.emit(config.SERVER_EVENTS.ROOM_STATE, {
-          timer: room.timer,
-          participants: Array.from(room.participants).map((id) => ({
-            socketId: id,
-            ...onlineUsers.get(id),
-          })),
-        });
-
-        // Notify others in room
-        socket.to(`room:${roomId}`).emit(config.SERVER_EVENTS.ROOM_USER_JOINED, {
-          socketId: socket.id,
-          user,
-        });
-        socket.to(`room:${roomId}`).emit(config.SERVER_EVENTS.ROOM_ACTIVITY, {
-          type: 'system',
-          message: `${user.username} joined the focus room.`,
-        });
-
-        // Social notification
-        socket.to(`room:${roomId}`).emit(config.SERVER_EVENTS.NOTIFICATION_RECEIVED, {
-          _id: Date.now().toString(),
-          type: 'social',
-          title: 'Peer Joined',
-          message: `${user.username} just joined your focus room!`,
-          createdAt: new Date(),
-        });
-
-        ack?.({ success: true, roomId });
+        await presenceService.handleRoomJoin(socket, data, ack);
       });
     });
 
     // ─── TIMER: Start timer ────────────────────────────────────────────────
     socket.on(config.CLIENT_EVENTS.TIMER_START, (data, ack) => {
       guard(socket, config.CLIENT_EVENTS.TIMER_START, data, ack, async () => {
-        // PURE BUSINESS LOGIC - guard() verified room membership
-        const roomId = data.roomId;
-        const duration = data.duration;
-        const room = roomsState.get(roomId);
-
-        if (!room) {
-          throw { code: 'PERMISSION_DENIED', message: 'Room not found' };
-        }
-
-        room.timer = {
-          state: 'running',
-          duration,
-          remainingTime: duration,
-        };
-
-        io.to(`room:${roomId}`).emit(config.SERVER_EVENTS.TIMER_SYNC, room.timer);
-
-        const user = onlineUsers.get(socket.id);
-        io.to(`room:${roomId}`).emit(config.SERVER_EVENTS.ROOM_ACTIVITY, {
-          type: 'system',
-          message: `${user?.username} started a ${duration / 60}-minute focus session.`,
-        });
-
-        ack?.({ success: true });
+        await timerController.handleStart(socket, data, ack);
       });
     });
 
     // ─── TIMER: Pause timer ───────────────────────────────────────────────
     socket.on(config.CLIENT_EVENTS.TIMER_PAUSE, (data, ack) => {
       guard(socket, config.CLIENT_EVENTS.TIMER_PAUSE, data, ack, async () => {
-        // PURE BUSINESS LOGIC - guard() verified room membership
-        const roomId = data.roomId;
-        const room = roomsState.get(roomId);
-
-        if (!room || room.timer.state !== 'running') {
-          throw { code: 'PERMISSION_DENIED', message: 'Cannot pause timer' };
-        }
-
-        room.timer.state = 'paused';
-        io.to(`room:${roomId}`).emit(config.SERVER_EVENTS.TIMER_SYNC, room.timer);
-
-        ack?.({ success: true });
+        await timerController.handlePause(socket, data, ack);
       });
     });
 
     // ─── TIMER: Resume timer ──────────────────────────────────────────────
     socket.on(config.CLIENT_EVENTS.TIMER_RESUME, (data, ack) => {
       guard(socket, config.CLIENT_EVENTS.TIMER_RESUME, data, ack, async () => {
-        // PURE BUSINESS LOGIC - guard() verified room membership
-        const roomId = data.roomId;
-        const room = roomsState.get(roomId);
-
-        if (!room || room.timer.state !== 'paused') {
-          throw { code: 'PERMISSION_DENIED', message: 'Cannot resume timer' };
-        }
-
-        room.timer.state = 'running';
-        io.to(`room:${roomId}`).emit(config.SERVER_EVENTS.TIMER_SYNC, room.timer);
-
-        ack?.({ success: true });
+        await timerController.handleResume(socket, data, ack);
       });
     });
 
     // ─── TIMER: Cancel timer ──────────────────────────────────────────────
     socket.on(config.CLIENT_EVENTS.TIMER_CANCEL, (data, ack) => {
       guard(socket, config.CLIENT_EVENTS.TIMER_CANCEL, data, ack, async () => {
-        // PURE BUSINESS LOGIC - guard() verified room membership
-        const roomId = data.roomId;
-        const room = roomsState.get(roomId);
-
-        if (!room) {
-          throw { code: 'PERMISSION_DENIED', message: 'Room not found' };
-        }
-
-        room.timer.state = 'idle';
-        room.timer.remainingTime = room.timer.duration;
-        io.to(`room:${roomId}`).emit(config.SERVER_EVENTS.TIMER_SYNC, room.timer);
-
-        ack?.({ success: true });
+        await timerController.handleCancel(socket, data, ack);
       });
     });
 
     // ─── CHAT: Send message ───────────────────────────────────────────────
     socket.on(config.CLIENT_EVENTS.ROOM_CHAT, (data, ack) => {
       guard(socket, config.CLIENT_EVENTS.ROOM_CHAT, data, ack, async () => {
-        // PURE BUSINESS LOGIC - guard() verified room membership
         const roomId = data.roomId;
-        const message = data.message;
+        const rawMessage = data.message;
         const user = onlineUsers.get(socket.id);
+
+        const message = sanitizeMessage(rawMessage);
+        if (!message) {
+          throw { code: 'INVALID_PAYLOAD', message: 'Message content cannot be empty after sanitization' };
+        }
+
+        const persistedMsg = await roomStore.createMessage({
+          roomId,
+          userId: socket.data.userId,
+          username: user.username,
+          message,
+          type: 'chat',
+        });
+
+        logAuditEvent({
+          action: 'message_persisted',
+          userId: socket.data.userId,
+          previousTier: socket.user?.tier,
+          resource: `room:${roomId}`,
+          success: true,
+          metadata: { messageId: persistedMsg._id, roomId },
+        });
 
         io.to(`room:${roomId}`).emit(config.SERVER_EVENTS.ROOM_ACTIVITY, {
           type: 'chat',
           userId: socket.data.userId,
           username: user.username,
           message,
+          createdAt: persistedMsg.createdAt,
+          _id: persistedMsg._id,
         });
 
-        ack?.({ success: true });
+        const xpServiceInstance = require('./services/xpService');
+        await xpServiceInstance.awardXp(socket.data.userId, 'ROOM_PARTICIPATION');
+
+        ack?.({ success: true, message: persistedMsg });
       });
     });
 
-    // ─── TYPING: Typing indicator ──────────────────────────────────────────
+    // ─── CHAT: Join global chat room ───────────────────────────────────────
+    socket.on(config.CLIENT_EVENTS.CHAT_JOIN, (data, ack) => {
+      guard(socket, config.CLIENT_EVENTS.CHAT_JOIN, data, ack, async () => {
+        const roomName = data?.roomId || 'global';
+        if (roomName !== 'global') {
+          throw { code: 'INVALID_PAYLOAD', message: 'Only global chat is supported' };
+        }
+
+        socket.join('global');
+        socket.data.rooms.add('global');
+
+        ack?.({ success: true, roomId: 'global' });
+      });
+    });
+
+    // ─── CHAT: Global chat message broadcast ───────────────────────────────
+    socket.on(config.CLIENT_EVENTS.CHAT_MESSAGE, (data, ack) => {
+      guard(socket, config.CLIENT_EVENTS.CHAT_MESSAGE, data, ack, async () => {
+        const message = String(data?.message || '').trim();
+        if (!message) {
+          throw { code: 'INVALID_PAYLOAD', message: 'Message is required' };
+        }
+
+        const chatMessage = buildChatMessage({
+          userId: socket.user.userId,
+          username: socket.user.username,
+          message,
+          room: 'global',
+        });
+
+        io.to('global').emit(config.SERVER_EVENTS.CHAT_MESSAGE, chatMessage);
+        ack?.({ success: true, message: chatMessage });
+      });
+    });
+
+    // ─── PRESENCE: Heartbeat ping ──────────────────────────────────────────
+    socket.on('presence:heartbeat', (data, ack) => {
+      const user = onlineUsers.get(socket.id);
+      if (user) {
+        user.lastSeen = Date.now();
+        if (data && data.status) {
+          user.status = data.status;
+        }
+        onlineUsers.set(socket.id, user);
+      }
+      ack?.({ success: true });
+    });
+
+    // ─── TYPING: Typing indicators (start/stop) ────────────────────────────
+    socket.on('room:typing:start', (data, ack) => {
+      const roomId = data?.roomId;
+      if (!roomId) return ack?.({ success: false, error: 'ROOM_REQUIRED' });
+
+      const user = onlineUsers.get(socket.id);
+      if (!user || user.roomId !== roomId) {
+        return ack?.({ success: false, error: 'NOT_ROOM_MEMBER' });
+      }
+
+      if (activeTypingUsers.has(socket.id)) {
+        clearTimeout(activeTypingUsers.get(socket.id));
+      } else {
+        socket.to(`room:${roomId}`).emit('room:user-typing', {
+          roomId,
+          userId: socket.user.userId,
+          username: socket.user.username,
+          typing: true,
+        });
+      }
+
+      const timeout = setTimeout(() => {
+        activeTypingUsers.delete(socket.id);
+        socket.to(`room:${roomId}`).emit('room:user-typing', {
+          roomId,
+          userId: socket.user.userId,
+          username: socket.user.username,
+          typing: false,
+        });
+      }, 5000);
+
+      activeTypingUsers.set(socket.id, timeout);
+      ack?.({ success: true });
+    });
+
+    socket.on('room:typing:stop', (data, ack) => {
+      const roomId = data?.roomId;
+      if (!roomId) return ack?.({ success: false, error: 'ROOM_REQUIRED' });
+
+      if (activeTypingUsers.has(socket.id)) {
+        clearTimeout(activeTypingUsers.get(socket.id));
+        activeTypingUsers.delete(socket.id);
+        socket.to(`room:${roomId}`).emit('room:user-typing', {
+          roomId,
+          userId: socket.user.userId,
+          username: socket.user.username,
+          typing: false,
+        });
+      }
+      ack?.({ success: true });
+    });
+
+    // ─── RECEIPTS: Message receipts ────────────────────────────────────────
+    socket.on('message:delivered', async (data, ack) => {
+      const { roomId, messageId } = data || {};
+      if (!messageId || !roomId) return ack?.({ success: false, error: 'INVALID_PAYLOAD' });
+
+      await roomStore.markMessageDelivered(messageId, socket.user.userId);
+      ack?.({ success: true });
+    });
+
+    socket.on('message:seen', async (data, ack) => {
+      const { roomId, messageId } = data || {};
+      if (!messageId || !roomId) return ack?.({ success: false, error: 'INVALID_PAYLOAD' });
+
+      await roomStore.markMessageSeen(messageId, socket.user.userId);
+      
+      io.to(`room:${roomId}`).emit('room:message-seen', {
+        roomId,
+        messageId,
+        userId: socket.user.userId,
+        seenAt: new Date().toISOString(),
+      });
+
+      ack?.({ success: true });
+    });
+
+    // ─── TYPING: Legacy Typing indicator compatibility ────────────────────
     socket.on(config.CLIENT_EVENTS.ROOM_TYPING, (data, ack) => {
       guard(socket, config.CLIENT_EVENTS.ROOM_TYPING, data, ack, async () => {
-        // PURE BUSINESS LOGIC - guard() verified room membership
         const roomId = data.roomId;
         const isTyping = data.isTyping;
         const user = onlineUsers.get(socket.id);
@@ -342,40 +523,7 @@ const initSocket = (server) => {
     // DISCONNECT HANDLER - Cleanup
     // ═══════════════════════════════════════════════════════════════════════
     socket.on('disconnect', () => {
-      const user = onlineUsers.get(socket.id);
-
-      if (user?.roomId) {
-        const room = roomsState.get(user.roomId);
-        if (room) {
-          room.participants.delete(socket.id);
-          socket.to(`room:${user.roomId}`).emit(config.SERVER_EVENTS.ROOM_USER_LEFT, {
-            socketId: socket.id,
-          });
-          socket.to(`room:${user.roomId}`).emit(config.SERVER_EVENTS.ROOM_ACTIVITY, {
-            type: 'system',
-            message: `${user.username} disconnected.`,
-          });
-
-          // Cleanup empty rooms
-          if (room.participants.size === 0) {
-            roomsState.delete(user.roomId);
-          }
-        }
-
-        permissions.trackRoomLeave(socket, user.roomId);
-      }
-
-      // Cleanup rate limits and timers
-      rateLimiter.resetUserLimits(socket.data.userId);
-      auth.clearTokenExpiryTimer(socket);
-
-      // Cleanup user tracking
-      onlineUsers.delete(socket.id);
-
-      io.emit(config.SERVER_EVENTS.GLOBAL_STATS, { onlineCount: onlineUsers.size });
-      console.log(
-        `[Socket.io] Client disconnected: ${socket.id} (User: ${socket.data.userId})`
-      );
+      presenceService.handleDisconnect(socket);
     });
 
     // Error handler

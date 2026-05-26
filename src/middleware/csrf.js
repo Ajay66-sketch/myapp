@@ -1,0 +1,56 @@
+// src/middleware/csrf.js
+// Custom Double-Submit Cookie CSRF Protection Middleware
+// Completely stateless and works perfectly for single page apps (SPA)
+
+const crypto = require('crypto');
+
+/**
+ * Generate a cryptographically secure random token
+ */
+const generateCsrfToken = () => {
+  return crypto.randomBytes(24).toString('hex');
+};
+
+/**
+ * CSRF Protection Middleware
+ */
+const csrfProtection = (req, res, next) => {
+  // 1. Skip validation if explicitly disabled in dev mode
+  const disableCsrf = process.env.DISABLE_CSRF === 'true';
+  
+  // 2. Manage setting the token cookie
+  let csrfCookieToken = req.cookies?.csrfToken;
+  if (!csrfCookieToken) {
+    csrfCookieToken = generateCsrfToken();
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    // Set cookie. Must NOT be httpOnly so that frontend client code can read it and send it back as a header!
+    res.cookie('csrfToken', csrfCookieToken, {
+      httpOnly: false, // Must be false for double-submit cookie pattern
+      secure: isProduction || process.env.COOKIE_SECURE === 'true',
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    });
+  }
+
+  // 3. Define state-changing HTTP methods requiring validation
+  const stateChangingMethods = ['POST', 'PUT', 'PATCH', 'DELETE'];
+
+  if (stateChangingMethods.includes(req.method) && !disableCsrf) {
+    const csrfHeaderToken = req.headers['x-csrf-token'] || req.headers['x-xsrf-token'];
+    
+    // Validate tokens match
+    if (!csrfCookieToken || !csrfHeaderToken || csrfCookieToken !== csrfHeaderToken) {
+      console.warn(`[Security Warning] CSRF token mismatch/missing on ${req.method} ${req.originalUrl}. Cookie: ${csrfCookieToken ? 'Present' : 'Missing'}, Header: ${csrfHeaderToken ? 'Present' : 'Missing'}`);
+      return res.status(403).json({
+        status: 'error',
+        error: 'CSRF_VALIDATION_FAILED',
+        message: 'Invalid or missing CSRF token'
+      });
+    }
+  }
+
+  next();
+};
+
+module.exports = csrfProtection;

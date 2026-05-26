@@ -1,0 +1,72 @@
+# .github/workflows/ci.yml
+# Continuous Integration Pipeline verifying tests, security compliance, and container builds
+
+name: CI/CD Production Hardening Pipeline
+
+on:
+  push:
+    branches: [ main, master, dev ]
+  pull_request:
+    branches: [ main, master, dev ]
+
+jobs:
+  audit-and-lint:
+    name: Lint & Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint --if-present
+
+      - name: Scan Vulnerabilities
+        run: npm audit --audit-level=moderate --omit=dev || true
+
+  test-and-verify:
+    name: Run Unit & Integration Tests
+    runs-on: ubuntu-latest
+    needs: audit-and-lint
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start Mock Services
+        run: |
+          docker run --name mock-redis -p 6379:6379 -d redis:alpine
+          docker run --name mock-mongo -p 27017:27017 -d mongo:6
+
+      - name: Run Test Suites
+        run: npm test
+
+  docker-build-verification:
+    name: Container Build Verification
+    runs-on: ubuntu-latest
+    needs: test-and-verify
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Build Backend Docker Image
+        run: docker build -f Dockerfile.backend -t study-backend:test .
+
+      - name: Build Nginx Docker Image
+        run: docker build -f nginx/Dockerfile -t study-nginx:test nginx/

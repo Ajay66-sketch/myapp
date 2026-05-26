@@ -20,6 +20,8 @@ const CLIENT_EVENTS = {
   // Chat & Activity
   ROOM_CHAT: 'room:chat',
   ROOM_TYPING: 'room:typing',
+  CHAT_JOIN: 'chat:join',
+  CHAT_MESSAGE: 'chat:message',
 };
 
 // ─── Server → Client Events ────────────────────────────────────────────────
@@ -48,6 +50,21 @@ const SERVER_EVENTS = {
   
   // Global
   GLOBAL_STATS: 'global:stats',
+  CHAT_MESSAGE: 'chat:message',
+  CHAT_ONLINE_USERS: 'chat:online-users',
+};
+
+// ─── Chat Message Contract ───────────────────────────────────────────────
+const CHAT_MESSAGE_SCHEMA = {
+  id: 'string',
+  type: 'chat_message',
+  room: 'global',
+  message: 'string',
+  user: {
+    userId: 'string',
+    username: 'string',
+  },
+  timestamp: 'number',
 };
 
 // ─── Rate Limits: Per Event, Per User ──────────────────────────────────────
@@ -56,6 +73,8 @@ const RATE_LIMITS = {
   'timer:start': { limit: 3, windowMs: 5000 },
   'room:chat': { limit: 10, windowMs: 1000 },
   'room:typing': { limit: 5, windowMs: 1000 },
+  'chat:join': { limit: 10, windowMs: 10000 },
+  'chat:message': { limit: 15, windowMs: 1000 },
   'room:join': { limit: 5, windowMs: 60000 },
   'room:leave': { limit: 5, windowMs: 60000 },
   'timer:pause': { limit: 10, windowMs: 60000 },
@@ -128,6 +147,13 @@ const ERRORS = {
     action: 'redirect_to_login',
     recoverable: false,
   },
+  INVALID_PAYLOAD: {
+    code: 'INVALID_PAYLOAD',
+    message: 'Invalid payload provided',
+    statusCode: 400,
+    action: 'none',
+    recoverable: false,
+  },
   INTERNAL_ERROR: {
     code: 'INTERNAL_ERROR',
     message: 'Internal server error',
@@ -149,4 +175,5 @@ module.exports = {
   ERRORS,
   TOKEN_CHECK_INTERVAL,
   TOKEN_EXPIRY_WARNING,
+  CHAT_MESSAGE_SCHEMA,
 };

@@ -1,0 +1,34 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: scholar-slo-rules
+  namespace: scholar-prod
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: scholar-slo-limits
+      rules:
+        - record: scholar:http_request_duration_seconds:p99_9
+          expr: histogram_quantile(0.999, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
+        - alert: HttpLatencySlaBreach
+          expr: scholar:http_request_duration_seconds:p99_9 > 0.200
+          for: 5m
+          labels:
+            severity: critical
+            tier: api
+          annotations:
+            summary: "HTTP Request Latency SLA Breach"
+            description: "99.9% of API requests completed in more than 200ms (Value: {{ $value }}s) over the last 5m."
+
+        - record: scholar:http_requests:error_rate_5xx
+          expr: sum(rate(http_requests_total{status_code=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))
+        - alert: HttpErrorRateSlaBreach
+          expr: scholar:http_requests:error_rate_5xx > 0.001
+          for: 2m
+          labels:
+            severity: critical
+            tier: api
+          annotations:
+            summary: "HTTP SLA Error Rate Breach"
+            description: "API 5xx error rate has exceeded the SLA threshold of 0.1% (Value: {{ $value | humanizePercentage }})."

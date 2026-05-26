@@ -1,0 +1,98 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "title": "HTTP Request Volume & RED Metrics",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total[5m])) by (status_code)",
+          "legendFormat": "Status: {{status_code}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "title": "Active WebSocket Sockets",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "socket_io_connections_active",
+          "legendFormat": "Sockets",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "title": "Container CPU & Memory Allocations",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(container_cpu_usage_seconds_total{namespace=\"scholar-prod\"}) by (pod)",
+          "legendFormat": "CPU: {{pod}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 4,
+      "title": "BullMQ Active/Failed Queue Latency",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(bullmq_jobs_active_total) by (queue)",
+          "legendFormat": "Active: {{queue}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": ["production", "scholar"],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "title": "Scholar Production Operations Dashboard",
+  "version": 1
+}

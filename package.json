@@ -4,13 +4,22 @@
   "main": "index.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "server": "node src/server.js",
+    "socket-server": "node src/socketServer.js",
+    "dev": "cd client && npm run dev",
+    "dev:all": "concurrently \"npm run server\" \"npm run socket-server\" \"cd client && npm run dev\"",
+    "test": "node scripts/verify-build.js",
+    "test:ai-phase1": "node scripts/aiPhase1Tests.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/auto-instrumentations-node": "^0.76.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.218.0",
+    "@opentelemetry/sdk-node": "^0.218.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "bcryptjs": "^3.0.3",
     "bullmq": "^5.76.10",
@@ -27,6 +36,12 @@
     "mongoose": "^9.3.3",
     "morgan": "^1.10.1",
     "openai": "^6.38.0",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "stripe": "^22.1.1",
+    "winston": "^3.19.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
   }
 }

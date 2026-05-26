@@ -4,16 +4,23 @@
 const mongoose = require('mongoose');
 
 const connectDB = async () => {
+  if (!process.env.MONGO_URI) {
+    console.log('   [MongoDB] Not configured. Starting with in-memory storage.');
+    return false;
+  }
+
   try {
     const conn = await mongoose.connect(process.env.MONGO_URI, {
       maxPoolSize: process.env.MONGO_POOL_SIZE || 50,
       serverSelectionTimeoutMS: 5000,
       socketTimeoutMS: 45000,
     });
-    console.log(`✅ MongoDB connected: ${conn.connection.host}`);
+    console.log(`   ✅ MongoDB connected: ${conn.connection.host}`);
+    return conn.connection.host;
   } catch (error) {
-    console.error('❌ MongoDB connection error:', error.message);
-    // Continuing without DB for UI demo
+    console.log(`   [MongoDB] Connection unavailable: ${error.message}`);
+    console.log('   [MongoDB] Continuing with in-memory storage.');
+    return false;
   }
 };
 

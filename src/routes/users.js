@@ -1,8 +1,8 @@
 // src/routes/users.js
-// User routes: list users, search users
+// User routes: list users, search users using UserRepository
 
 const express = require('express');
-const User = require('../models/User');
+const userRepository = require('../repositories/UserRepository');
 const { protect } = require('../middleware/auth');
 
 const router = express.Router();
@@ -16,20 +16,18 @@ router.get('/', async (req, res) => {
   try {
     const { search } = req.query;
 
-    // Build the query — always exclude the current user
-    const query = { _id: { $ne: req.user._id } };
+    const users = await userRepository.searchUsers(req.user._id, search, 50);
 
-    // If a search term is provided, do a case-insensitive username search
-    if (search && search.trim()) {
-      query.username = { $regex: search.trim(), $options: 'i' };
-    }
+    // Map to the shape expected by client
+    const clientUsers = users.map(u => ({
+      _id: u._id,
+      username: u.username,
+      email: u.email,
+      avatar: u.avatar,
+      isOnline: u.isOnline
+    }));
 
-    const users = await User.find(query)
-      .select('username email avatar isOnline')
-      .sort({ username: 1 })
-      .limit(50); // cap results for performance
-
-    res.json({ users });
+    res.json({ users: clientUsers });
   } catch (error) {
     console.error('Fetch users error:', error);
     res.status(500).json({ message: 'Failed to fetch users' });
@@ -40,11 +38,13 @@ router.get('/', async (req, res) => {
 // Get a single user by ID
 router.get('/:userId', async (req, res) => {
   try {
-    const user = await User.findById(req.params.userId).select('-password');
+    const user = await userRepository.get(req.params.userId);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-    res.json({ user });
+    
+    // Convert to safe object (excludes password)
+    res.json({ user: user.toSafeObject() });
   } catch (error) {
     console.error('Fetch user error:', error);
     res.status(500).json({ message: 'Failed to fetch user' });
@@ -58,21 +58,22 @@ router.put('/profile', async (req, res) => {
     const { username, bio, avatar } = req.body;
     const user = req.user;
 
+    const updateData = {};
     if (username) {
       // Check if username is already taken by another user
-      const existing = await User.findOne({ username, _id: { $ne: user._id } });
-      if (existing) {
+      const existing = await userRepository.getByUsername(username);
+      if (existing && existing._id.toString() !== user._id.toString()) {
         return res.status(409).json({ message: 'Username is already taken' });
       }
-      user.username = username;
+      updateData.username = username;
     }
     
-    if (bio !== undefined) user.bio = bio;
-    if (avatar !== undefined) user.avatar = avatar;
+    if (bio !== undefined) updateData.bio = bio;
+    if (avatar !== undefined) updateData.avatar = avatar;
 
-    await user.save();
+    const updatedUser = await userRepository.update(user._id, updateData);
 
-    res.json({ message: 'Profile updated successfully', user: user.toSafeObject() });
+    res.json({ message: 'Profile updated successfully', user: updatedUser.toSafeObject() });
   } catch (error) {
     console.error('Update profile error:', error);
     res.status(500).json({ message: 'Failed to update profile' });
@@ -86,18 +87,19 @@ router.post('/onboarding', async (req, res) => {
     const { username } = req.body;
     const user = req.user;
 
+    const updateData = { onboardingCompleted: true };
+
     if (username && username !== user.username) {
-      const existing = await User.findOne({ username, _id: { $ne: user._id } });
-      if (existing) {
+      const existing = await userRepository.getByUsername(username);
+      if (existing && existing._id.toString() !== user._id.toString()) {
         return res.status(409).json({ message: 'Username is already taken' });
       }
-      user.username = username;
+      updateData.username = username;
     }
 
-    user.onboardingCompleted = true;
-    await user.save();
+    const updatedUser = await userRepository.update(user._id, updateData);
 
-    res.json({ message: 'Onboarding completed', user: user.toSafeObject() });
+    res.json({ message: 'Onboarding completed', user: updatedUser.toSafeObject() });
   } catch (error) {
     console.error('Onboarding error:', error);
     res.status(500).json({ message: 'Failed to complete onboarding' });

@@ -1,0 +1,69 @@
+# docker-compose.yml
+# Production grade deployment orchestration stack with healthcheck gates
+
+version: '3.8'
+
+services:
+  # ─── Redis Persistent Store ────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: study-redis
+    command: redis-server --appendonly yes --requirepass dev-redis-pass
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "dev-redis-pass", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── MongoDB Replica / Persistent DB ────────────────────────────────────────
+  mongodb:
+    image: mongo:6-jammy
+    container_name: study-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.runCommand({ping: 1})"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── Backend Application Service ──────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: study-backend
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      - MONGODB_URI=mongodb://mongodb:27017/ai-study
+      - REDIS_URL=redis://:dev-redis-pass@redis:6379
+      - JWT_SECRET=production-jwt-super-secret-secure
+    ports:
+      - "5000:5000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+
+  # ─── Nginx Reverse Proxy / Load Balancer ──────────────────────────────────
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: study-nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  redis_data:
+  mongo_data:

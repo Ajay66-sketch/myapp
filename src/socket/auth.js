@@ -2,6 +2,7 @@
 // JWT verification, token utilities, and per-socket expiry timers
 
 const jwt = require('jsonwebtoken');
+const env = require('../config/env');
 const config = require('./config');
 
 /**
@@ -10,9 +11,9 @@ const config = require('./config');
  */
 function verifyToken(token, secret) {
   try {
-    return jwt.verify(token, secret);
+    return { decoded: jwt.verify(token, secret) };
   } catch (err) {
-    return null;
+    return { error: err };
   }
 }
 
@@ -55,11 +56,19 @@ function authenticateSocket(socket, next) {
     return next(config.ERRORS.NO_TOKEN);
   }
   
-  const decoded = verifyToken(token, process.env.JWT_SECRET);
-  if (!decoded) {
+  const { decoded, error } = verifyToken(token, env.getJwtSecret());
+
+  if (error) {
+    if (error.name === 'TokenExpiredError') {
+      return next(config.ERRORS.TOKEN_EXPIRED);
+    }
     return next(config.ERRORS.INVALID_TOKEN);
   }
-  
+
+  if (decoded.tokenType && decoded.tokenType !== 'access') {
+    return next(config.ERRORS.INVALID_TOKEN);
+  }
+
   // Verify device fingerprint (prevents token theft across devices)
   const clientFingerprint = socket.handshake.auth?.deviceId;
   const tokenFingerprint = decoded.deviceId;
@@ -69,10 +78,15 @@ function authenticateSocket(socket, next) {
   
   // Attach user data to socket for later access
   socket.data.userId = getUserIdFromToken(decoded);
+  socket.data.username = decoded.username || 'User';
   socket.data.sessionId = decoded.sessionId;
   socket.data.deviceId = decoded.deviceId;
   socket.data.tokenExpiry = decoded.exp * 1000; // Convert to milliseconds
   socket.data.rooms = new Set(); // Track user's rooms
+  socket.user = {
+    userId: socket.data.userId,
+    username: socket.data.username,
+  };
   
   next();
 }
@@ -88,6 +102,7 @@ function setupTokenExpiryTimer(socket) {
     clearInterval(socket._tokenExpiryTimer);
   }
   
+  const cleanupManager = require('../core/cleanupManager');
   socket._tokenExpiryTimer = setInterval(() => {
     // Skip if socket disconnected or no expiry data
     if (!socket.connected || !socket.data?.tokenExpiry) return;
@@ -105,6 +120,7 @@ function setupTokenExpiryTimer(socket) {
       });
     }
   }, config.TOKEN_CHECK_INTERVAL);
+  cleanupManager.registerInterval(socket._tokenExpiryTimer);
 }
 
 /**
@@ -112,6 +128,8 @@ function setupTokenExpiryTimer(socket) {
  */
 function clearTokenExpiryTimer(socket) {
   if (socket._tokenExpiryTimer) {
+    const cleanupManager = require('../core/cleanupManager');
+    cleanupManager.deregisterInterval(socket._tokenExpiryTimer);
     clearInterval(socket._tokenExpiryTimer);
     socket._tokenExpiryTimer = null;
   }

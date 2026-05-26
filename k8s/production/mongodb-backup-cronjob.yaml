@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mongodb-backup-cronjob
+  namespace: scholar-prod
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: mongo:6.0
+              command:
+                - "/bin/bash"
+                - "-c"
+                - |
+                  apt-get update && apt-get install -y gnupg awscli
+                  /app/scripts/backup-mongodb.sh
+              envFrom:
+                - configMapRef:
+                    name: scholar-config
+                - secretRef:
+                    name: scholar-secrets
+              volumeMounts:
+                - name: app-scripts
+                  mountPath: /app/scripts
+          volumes:
+            - name: app-scripts
+              configMap:
+                name: scholar-backup-scripts-configmap
+                defaultMode: 0755

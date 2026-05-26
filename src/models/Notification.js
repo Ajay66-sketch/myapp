@@ -10,7 +10,7 @@ const notificationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['streak', 'comeback', 'social', 'ai_nudge', 'achievement'],
+      enum: ['streak', 'comeback', 'social', 'ai_nudge', 'achievement', 'mention', 'ai_summary', 'invite', 'billing'],
       required: true
     },
     title: {

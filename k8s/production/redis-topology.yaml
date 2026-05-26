@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-cluster
+  namespace: scholar-prod
+spec:
+  serviceName: "redis-cluster-svc"
+  replicas: 6
+  selector:
+    matchLabels:
+      app: redis-cluster
+  template:
+    metadata:
+      labels:
+        app: redis-cluster
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - redis-cluster
+              topologyKey: "kubernetes.io/hostname"
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          command:
+            - "redis-server"
+            - "--cluster-enabled"
+            - "yes"
+            - "--cluster-config-file"
+            - "/data/nodes.conf"
+            - "--cluster-node-timeout"
+            - "5000"
+            - "--appendonly"
+            - "yes"
+            - "--protected-mode"
+            - "no"
+          ports:
+            - name: redis
+              containerPort: 6379
+            - name: bus
+              containerPort: 16379
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: redis-data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-cluster-svc
+  namespace: scholar-prod
+spec:
+  clusterIP: None
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+    - name: bus
+      port: 16379
+      targetPort: 16379
+  selector:
+    app: redis-cluster

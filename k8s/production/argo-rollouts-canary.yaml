@@ -1,0 +1,44 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: scholar-backend-canary
+  namespace: scholar-prod
+spec:
+  replicas: 5
+  strategy:
+    canary:
+      steps:
+        - setWeight: 10
+        - pause: { duration: 1h }
+        - setWeight: 30
+        - pause: { duration: 30m }
+        - setWeight: 50
+        - pause: { duration: 30m }
+        - setWeight: 80
+        - pause: { duration: 15m }
+  selector:
+    matchLabels:
+      app: scholar-backend-canary
+  template:
+    metadata:
+      labels:
+        app: scholar-backend-canary
+    spec:
+      containers:
+        - name: app
+          image: antigravity/scholar-backend:latest
+          ports:
+            - containerPort: 5000
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 5000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1024Mi"
