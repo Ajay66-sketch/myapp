@@ -1,0 +1,50 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: scholar-infrastructure-alerts
+  namespace: scholar-prod
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: scholar-infrastructure
+      rules:
+        - alert: PodContainerCrashing
+          expr: rate(kube_pod_container_status_restarts_total[5m]) > 0
+          for: 2m
+          labels:
+            severity: warning
+            tier: infrastructure
+          annotations:
+            summary: "Pod container is restarting frequently"
+            description: "Pod {{ $labels.pod }} container {{ $labels.container }} restarted frequently over the last 2 minutes."
+
+        - alert: MongoReplicaSetNoPrimary
+          expr: mongodb_mongod_replset_number_of_members{state="PRIMARY"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            tier: database
+          annotations:
+            summary: "MongoDB Replica Set has NO Primary"
+            description: "The MongoDB Replica Set rs0 has no active PRIMARY node elected. High write failure risk!"
+
+        - alert: RedisClusterNodesDown
+          expr: redis_cluster_state{state="fail"} == 1
+          for: 1m
+          labels:
+            severity: critical
+            tier: cache
+          annotations:
+            summary: "Redis Cluster State Degraded"
+            description: "Redis cluster status is active 'fail'. Node split or node down has occurred."
+
+        - alert: PodCpuUsageStress
+          expr: container_cpu_usage_seconds_total{container="app"} > 1.8
+          for: 5m
+          labels:
+            severity: warning
+            tier: app
+          annotations:
+            summary: "Kubernetes Pod CPU Stress"
+            description: "Pod {{ $labels.pod }} is exceeding 90% of its CPU limits continuously for 5 minutes."

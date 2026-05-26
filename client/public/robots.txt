@@ -1,0 +1,7 @@
+# robots.txt for Antigravity Focus SaaS platform
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin/
+
+Sitemap: https://antigravity.io/sitemap.xml

@@ -1,0 +1,74 @@
+# .github/workflows/ci-cd.yml
+# GitHub Actions Continuous Integration Pipeline
+# Automatically triggers on every push and PR to validate build compilation, linting, and health telemetry
+
+name: Continuous Integration Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+
+jobs:
+  # Job 1: Compile and Verify Backend Application
+  backend-ci:
+    name: Backend Build & Smoke Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Root & Backend Dependencies
+        run: |
+          npm ci
+
+      - name: Execute Compiler Smoke & Telemetry Verification Checks
+        run: |
+          npm test
+        env:
+          NODE_ENV: production
+          JWT_SECRET: github-actions-ci-telemetry-testing-secret
+          DISABLE_CSRF: true
+
+  # Job 2: Compile and Build Frontend Application
+  frontend-ci:
+    name: Frontend Compilation & TypeScript Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: 'client/package-lock.json'
+
+      - name: Install Client Dependencies
+        run: |
+          cd client
+          npm ci
+
+      - name: Compile and Validate Production static bundle
+        run: |
+          cd client
+          npm run build
+        env:
+          VITE_API_URL: http://localhost:5000/api/v1
+          VITE_SOCKET_URL: http://localhost:5000

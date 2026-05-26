@@ -1,12 +1,14 @@
 // src/routes/studyRooms.js
+// Routes for study rooms utilizing RoomRepository for cache-first persistence
+
 const express = require('express');
 const router = express.Router();
-const StudyRoom = require('../models/StudyRoom');
+const roomRepository = require('../repositories/RoomRepository');
 
 // Get all public study rooms
 router.get('/', async (req, res, next) => {
   try {
-    const rooms = await StudyRoom.find({ isPrivate: false }).sort({ activeUsersCount: -1 });
+    const rooms = await roomRepository.getAll(false);
     res.status(200).json({ status: 'success', data: rooms });
   } catch (error) {
     next(error);
@@ -16,19 +18,19 @@ router.get('/', async (req, res, next) => {
 // Create a new study room
 router.post('/', async (req, res, next) => {
   try {
-    // In a real app, creatorId comes from req.user (auth middleware)
     const { name, description, creatorId, isPrivate, tags, settings } = req.body;
     
-    const newRoom = await StudyRoom.create({
+    // Fallback ownerId mapping
+    const room = await roomRepository.create({
       name,
       description,
-      creatorId,
+      ownerId: creatorId,
       isPrivate,
       tags,
       settings
     });
 
-    res.status(201).json({ status: 'success', data: newRoom });
+    res.status(201).json({ status: 'success', data: room });
   } catch (error) {
     next(error);
   }
@@ -37,7 +39,7 @@ router.post('/', async (req, res, next) => {
 // Get single study room
 router.get('/:id', async (req, res, next) => {
   try {
-    const room = await StudyRoom.findById(req.params.id);
+    const room = await roomRepository.get(req.params.id);
     if (!room) {
       return res.status(404).json({ status: 'error', message: 'Room not found' });
     }

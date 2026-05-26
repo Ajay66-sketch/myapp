@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: scholar-namespace-quota
+  namespace: scholar-prod
+spec:
+  hard:
+    pods: "30"
+    requests.cpu: "10"
+    requests.memory: "20Gi"
+    limits.cpu: "20"
+    limits.memory: "40Gi"
+    persistentvolumeclaims: "10"
+    services: "10"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: scholar-default-limits
+  namespace: scholar-prod
+spec:
+  limits:
+    - default:
+        cpu: "1000m"
+        memory: "1024Mi"
+      defaultRequest:
+        cpu: "200m"
+        memory: "256Mi"
+      type: Container
