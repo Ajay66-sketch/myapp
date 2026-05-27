@@ -62,11 +62,17 @@ server.listen(PORT, () => {
   console.log('Socket.IO transport configured: websocket + polling');
 });
 
-const gracefulShutdown = () => {
-  console.log('🛑 Received shutdown signal. Closing realtime server...');
-  server.close(() => {
+const gracefulShutdown = (signal = 'SIGTERM') => {
+  console.log(`🛑 Received shutdown signal [${signal}]. Closing realtime server...`);
+  server.close(async () => {
     console.log('Realtime HTTP server closed.');
-    process.exit(0);
+    try {
+      const { initiateGracefulShutdown } = require('./core/shutdownManager');
+      await initiateGracefulShutdown(signal);
+    } catch (err) {
+      console.error('Error during shutdownManager sequence:', err);
+      process.exit(1);
+    }
   });
 
   setTimeout(() => {
@@ -75,5 +81,5 @@ const gracefulShutdown = () => {
   }, 10000);
 };
 
-process.on('SIGTERM', gracefulShutdown);
-process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

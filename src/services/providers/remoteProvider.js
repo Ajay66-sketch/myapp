@@ -3,7 +3,7 @@
 
 const aiConfig = require('../../config/ai');
 
-async function callRemoteProvider(url, headers, body, retries = aiConfig.retryCounts, delay = 1000) {
+async function callRemoteProvider(url, headers, body, retries = aiConfig.retryCounts, delay = 1000, signal = null) {
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -12,6 +12,7 @@ async function callRemoteProvider(url, headers, body, retries = aiConfig.retryCo
         ...headers,
       },
       body: JSON.stringify(body),
+      signal,
     });
 
     if (!response.ok) {
@@ -21,9 +22,12 @@ async function callRemoteProvider(url, headers, body, retries = aiConfig.retryCo
 
     return response.json();
   } catch (error) {
+    if (error.name === 'AbortError') {
+      throw error; // Propagate cancellation immediately without retrying
+    }
     if (retries > 0) {
       await new Promise((resolve) => setTimeout(resolve, delay));
-      return callRemoteProvider(url, headers, body, retries - 1, delay * 2);
+      return callRemoteProvider(url, headers, body, retries - 1, delay * 2, signal);
     }
     throw error;
   }

@@ -42,7 +42,30 @@ function trimPromptToBudget({ systemPrompt, prompt, maxPromptTokens }) {
   return reversedBuffer.join('\n');
 }
 
+/**
+ * Optimizes prompts by stripping conversational filler words and compacting whitespace.
+ */
+function optimizePrompt(text) {
+  if (!text || typeof text !== 'string') return '';
+  
+  let clean = text.trim();
+  
+  // Replace conversational prefixes/fillers case-insensitively
+  const fillers = [
+    /^(please|hello|hi|hey|could you|can you|would you mind|would you please)\s+/i,
+    /\b(please|can you|could you|thank you very much|thanks in advance)\b/ig
+  ];
+  
+  fillers.forEach(regex => {
+    clean = clean.replace(regex, '');
+  });
+  
+  // Compact redundant multi-spaces/newlines
+  return clean.replace(/[ \t]+/g, ' ').trim();
+}
+
 module.exports = {
   estimateTokenCount,
   trimPromptToBudget,
+  optimizePrompt,
 };

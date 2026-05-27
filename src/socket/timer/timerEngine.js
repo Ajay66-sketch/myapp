@@ -6,7 +6,13 @@ const presenceService = require('../presence/presenceService');
 const config = require('../config');
 
 const getIO = () => require('../../socket').getIO();
-const getRedisClient = () => require('../../socket').getRedisClient();
+const getRedisClient = () => {
+  try {
+    return require('../../config/redisClient').getRedisClient();
+  } catch (err) {
+    return null;
+  }
+};
 
 const cleanupManager = require('../../core/cleanupManager');
 

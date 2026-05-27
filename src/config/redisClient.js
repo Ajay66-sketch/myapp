@@ -12,11 +12,22 @@ function normalizeEnvValue(value, fallback) {
   return trimmed;
 }
 
-let _singleton = null;
+// Production-safe connection retry strategy with exponential backoff and max limit
+const productionRetryStrategy = (times) => {
+  const delay = Math.min(times * 200, 10000); // Wait up to 10 seconds between retries
+  console.log(`[Redis Client] Connection lost. Attempting retry #${times} in ${delay}ms...`);
+  return delay;
+};
 
 function createRedisClient(options = {}) {
   const mode = normalizeEnvValue(process.env.REDIS_MODE, 'standalone').toLowerCase();
   console.log(`[Redis Client] Instantiating Redis client in [${mode.toUpperCase()}] mode`);
+
+  const connectionTimeoutOptions = {
+    connectTimeout: 10000, // 10s connection timeout
+    maxRetriesPerRequest: options.maxRetriesPerRequest !== undefined ? options.maxRetriesPerRequest : null, // Crucial for BullMQ
+    retryStrategy: options.retryStrategy || productionRetryStrategy,
+  };
 
   if (mode === 'cluster') {
     const rawNodes = normalizeEnvValue(process.env.REDIS_CLUSTER_NODES, 'localhost:6379');
@@ -27,8 +38,8 @@ function createRedisClient(options = {}) {
 
     return new Redis.Cluster(nodes, {
       redisOptions: {
-        maxRetriesPerRequest: options.maxRetriesPerRequest !== undefined ? options.maxRetriesPerRequest : null,
         enableReadyCheck: true,
+        ...connectionTimeoutOptions,
         ...options,
       },
     });
@@ -47,20 +58,25 @@ function createRedisClient(options = {}) {
       name: masterName,
       sentinelPassword: normalizeEnvValue(process.env.REDIS_SENTINEL_PASSWORD, undefined),
       password: normalizeEnvValue(process.env.REDIS_PASSWORD, undefined),
-      maxRetriesPerRequest: options.maxRetriesPerRequest !== undefined ? options.maxRetriesPerRequest : null,
+      enableReadyCheck: true,
+      ...connectionTimeoutOptions,
       ...options,
     });
   }
 
   const connectionUrl = normalizeEnvValue(process.env.REDIS_URL, undefined);
   if (connectionUrl) {
-    return new Redis(connectionUrl, options);
+    return new Redis(connectionUrl, {
+      ...connectionTimeoutOptions,
+      ...options,
+    });
   }
 
   return new Redis({
     host: normalizeEnvValue(process.env.REDIS_HOST, 'localhost'),
     port: parseInt(normalizeEnvValue(process.env.REDIS_PORT, '6379'), 10),
     password: normalizeEnvValue(process.env.REDIS_PASSWORD, undefined),
+    ...connectionTimeoutOptions,
     ...options,
   });
 }
@@ -75,11 +91,16 @@ function getRedisClient(options = {}) {
   try {
     _singleton = createRedisClient(options);
     // attach a noop error handler to avoid unhandled errors leaking
-    _singleton.on('error', () => {});
+    _singleton.on('error', (err) => {
+      console.error(`[Redis Client Error]: ${err.message}`);
+    });
     return _singleton;
   } catch (err) {
+    console.error('[Redis Client] Failed to initialize Redis singleton:', err.message);
     return null;
   }
 }
+
+let _singleton = null;
 
 module.exports = { createRedisClient, getRedisClient };

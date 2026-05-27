@@ -58,7 +58,7 @@ networkPolicy:
 env:
   NODE_ENV: "production"
   PORT: "5000"
-  MONGO_URI: "mongodb://mongodb-replicaset-0.mongodb-replicaset-svc:27017,mongodb-replicaset-1.mongodb-replicaset-svc:27017,mongodb-replicaset-2.mongodb-replicaset-svc:27017/scholar-prod?replicaSet=rs0&authSource=admin"
+  MONGO_URI: "mongodb://mongodb-replicaset-0.mongodb-replicaset-svc:27017,mongodb-replicaset-1.mongodb-replicaset-svc:27017,mongodb-replicaset-2.mongodb-replicaset-svc:27017/scholar-prod?replicaSet=rs0&authSource=admin&readPreference=secondaryPreferred"
   REDIS_MODE: "cluster"
   REDIS_CLUSTER_NODES: "redis-cluster-0.redis-cluster-svc:6379,redis-cluster-1.redis-cluster-svc:6379,redis-cluster-2.redis-cluster-svc:6379"
   VAULT_ADDR: "http://vault.scholar-prod.svc.cluster.local:8200"

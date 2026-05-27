@@ -15,7 +15,6 @@ const analyticsEventSchema = new mongoose.Schema({
   },
   sessionId: {
     type: String,
-    required: true,
     index: true
   },
   properties: {

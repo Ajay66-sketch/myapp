@@ -1,0 +1,49 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: scholar-worker-ai-coach-scaledobject
+  namespace: scholar-prod
+  labels:
+    app: scholar-worker-ai-coach
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: scholar-worker-ai-coach
+  minReplicaCount: 1
+  maxReplicaCount: 15
+  cooldownPeriod: 180
+  pollingInterval: 15
+  triggers:
+    - type: redis
+      metadata:
+        host: redis-cluster-svc.scholar-prod.svc.cluster.local
+        port: "6379"
+        listName: bull.ai-coach.waiting
+        listLength: "5"
+        type: list
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: scholar-worker-notifications-scaledobject
+  namespace: scholar-prod
+  labels:
+    app: scholar-worker-notifications
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: scholar-worker-notifications
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  cooldownPeriod: 120
+  pollingInterval: 15
+  triggers:
+    - type: redis
+      metadata:
+        host: redis-cluster-svc.scholar-prod.svc.cluster.local
+        port: "6379"
+        listName: bull.system-notifications.waiting
+        listLength: "15"
+        type: list

@@ -50,12 +50,14 @@ async function initiateGracefulShutdown(signal) {
       const notificationQueue = require('../queue/notificationQueue');
       const telemetryQueue = require('../queue/telemetryQueue');
       const analyticsQueue = require('../queue/analyticsQueue');
+      const { aiQueue } = require('../queue/aiQueue');
       
       await Promise.all([
         aiTutorQueue.close(),
         notificationQueue.close(),
         telemetryQueue.close(),
-        analyticsQueue.close()
+        analyticsQueue.close(),
+        aiQueue.close()
       ]);
       console.log('   ✔ All queue handlers successfully drained and closed.');
     } catch (err) {

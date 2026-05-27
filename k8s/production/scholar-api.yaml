@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scholar-api
+  namespace: scholar-prod
+  labels:
+    app: scholar-api
+    tier: api
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 0 # Zero-downtime rollout configuration!
+  selector:
+    matchLabels:
+      app: scholar-api
+  template:
+    metadata:
+      labels:
+        app: scholar-api
+    spec:
+      containers:
+        - name: app
+          image: antigravity/scholar-backend:latest
+          ports:
+            - containerPort: 5000
+          resources:
+            limits:
+              cpu: "1000m"
+              memory: "1024Mi"
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+          envFrom:
+            - configMapRef:
+                name: scholar-config
+          env:
+            - name: NODE_ENV
+              value: "production"
+          # SRE Startup Probe: gives plenty of time to warm up before health checks fire
+          startupProbe:
+            httpGet:
+              path: /api/health/liveness
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 15
+          # Readiness Probe: ensures database and redis are connected before receiving traffic
+          readinessProbe:
+            httpGet:
+              path: /api/health/readiness
+              port: 5000
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Liveness Probe: restarts deadlocks
+          livenessProbe:
+            httpGet:
+              path: /api/health/liveness
+              port: 5000
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 10"] # Wait for load balancer to stop routing requests here
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scholar-api-svc
+  namespace: scholar-prod
+  labels:
+    app: scholar-api
+spec:
+  selector:
+    app: scholar-api
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: scholar-api-hpa
+  namespace: scholar-prod
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: scholar-api
+  minReplicas: 3
+  maxReplicas: 15
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: scholar-api-pdb
+  namespace: scholar-prod
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: scholar-api

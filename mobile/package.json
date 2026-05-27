@@ -1,0 +1,30 @@
+{
+  "name": "scholar-mobile",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "ts:check": "tsc"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "~1.23.1",
+    "expo": "~51.0.0",
+    "expo-haptics": "^56.0.3",
+    "expo-notifications": "~0.28.1",
+    "expo-router": "~3.5.15",
+    "expo-status-bar": "~1.12.1",
+    "react": "18.2.0",
+    "react-native": "0.74.1",
+    "react-native-reanimated": "^4.3.1",
+    "socket.io-client": "^4.7.5",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0",
+    "@types/react": "~18.2.45",
+    "typescript": "~5.3.3"
+  },
+  "private": true
+}

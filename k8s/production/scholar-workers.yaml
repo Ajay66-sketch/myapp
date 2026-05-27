@@ -1,0 +1,132 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scholar-worker-ai-coach
+  namespace: scholar-prod
+  labels:
+    app: scholar-worker-ai-coach
+    tier: worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: scholar-worker-ai-coach
+  template:
+    metadata:
+      labels:
+        app: scholar-worker-ai-coach
+    spec:
+      containers:
+        - name: worker
+          image: antigravity/scholar-backend:latest
+          command: ["node", "src/workers/index.js"]
+          args: ["--queue=ai-coach"]
+          resources:
+            limits:
+              cpu: "1000m"
+              memory: "1536Mi"
+            requests:
+              cpu: "500m"
+              memory: "768Mi"
+          env:
+            - name: QUEUE_NAME
+              value: "ai-coach"
+            - name: AI_WORKER_CONCURRENCY
+              value: "2"
+            - name: NODE_ENV
+              value: "production"
+          envFrom:
+            - configMapRef:
+                name: scholar-config
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 10"] # Allow active AI jobs to complete gracefully before shutdown
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scholar-worker-notifications
+  namespace: scholar-prod
+  labels:
+    app: scholar-worker-notifications
+    tier: worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: scholar-worker-notifications
+  template:
+    metadata:
+      labels:
+        app: scholar-worker-notifications
+    spec:
+      containers:
+        - name: worker
+          image: antigravity/scholar-backend:latest
+          command: ["node", "src/workers/index.js"]
+          args: ["--queue=system-notifications"]
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+          env:
+            - name: QUEUE_NAME
+              value: "system-notifications"
+            - name: NOTIFICATION_WORKER_CONCURRENCY
+              value: "10"
+            - name: NODE_ENV
+              value: "production"
+          envFrom:
+            - configMapRef:
+                name: scholar-config
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scholar-worker-tutor-milestones
+  namespace: scholar-prod
+  labels:
+    app: scholar-worker-tutor-milestones
+    tier: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scholar-worker-tutor-milestones
+  template:
+    metadata:
+      labels:
+        app: scholar-worker-tutor-milestones
+    spec:
+      containers:
+        - name: worker
+          image: antigravity/scholar-backend:latest
+          command: ["node", "src/workers/index.js"]
+          args: ["--queue=ai-tutor-milestones"]
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+          env:
+            - name: QUEUE_NAME
+              value: "ai-tutor-milestones"
+            - name: NODE_ENV
+              value: "production"
+          envFrom:
+            - configMapRef:
+                name: scholar-config
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]

@@ -9,6 +9,7 @@ spec:
   groups:
     - name: scholar-slo-limits
       rules:
+        # 1. p99.9 Latency Record & Alert
         - record: scholar:http_request_duration_seconds:p99_9
           expr: histogram_quantile(0.999, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
         - alert: HttpLatencySlaBreach
@@ -21,6 +22,20 @@ spec:
             summary: "HTTP Request Latency SLA Breach"
             description: "99.9% of API requests completed in more than 200ms (Value: {{ $value }}s) over the last 5m."
 
+        # 2. p95 Latency Record & Alert (Startup Scale Standard)
+        - record: scholar:http_request_duration_seconds:p95
+          expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
+        - alert: HttpLatencyP95Breach
+          expr: scholar:http_request_duration_seconds:p95 > 1.5
+          for: 5m
+          labels:
+            severity: warning
+            tier: api
+          annotations:
+            summary: "p95 HTTP Latency SLA Warning"
+            description: "95th percentile of request latencies exceeded 1.5s (Value: {{ $value }}s) over the last 5m."
+
+        # 3. 5xx Error Rate Record & Alerts
         - record: scholar:http_requests:error_rate_5xx
           expr: sum(rate(http_requests_total{status_code=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))
         - alert: HttpErrorRateSlaBreach
@@ -32,3 +47,23 @@ spec:
           annotations:
             summary: "HTTP SLA Error Rate Breach"
             description: "API 5xx error rate has exceeded the SLA threshold of 0.1% (Value: {{ $value | humanizePercentage }})."
+        - alert: HttpErrorRateHigh
+          expr: scholar:http_requests:error_rate_5xx > 0.01
+          for: 5m
+          labels:
+            severity: page
+            tier: api
+          annotations:
+            summary: "High HTTP 5xx Error Rate alert"
+            description: "API 5xx error rate is elevated above 1.0% (Value: {{ $value | humanizePercentage }})."
+
+        # 4. Core Service Uptime Alert
+        - alert: ScholarServiceOffline
+          expr: up{job="scholar-backend"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            tier: infrastructure
+          annotations:
+            summary: "Scholar Backend Service instance offline"
+            description: "Backend service instance has been down for more than 1 minute. Instant uptime breach!"

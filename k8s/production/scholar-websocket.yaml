@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scholar-websocket
+  namespace: scholar-prod
+  labels:
+    app: scholar-websocket
+    tier: websocket
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 0 # Zero-downtime rolling upgrades
+  selector:
+    matchLabels:
+      app: scholar-websocket
+  template:
+    metadata:
+      labels:
+        app: scholar-websocket
+    spec:
+      containers:
+        - name: app
+          image: antigravity/scholar-backend:latest
+          ports:
+            - containerPort: 5000
+          resources:
+            limits:
+              cpu: "1000m"
+              memory: "1024Mi"
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+          envFrom:
+            - configMapRef:
+                name: scholar-config
+          env:
+            - name: NODE_ENV
+              value: "production"
+          startupProbe:
+            httpGet:
+              path: /api/health/liveness
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 15
+          readinessProbe:
+            httpGet:
+              path: /api/health/readiness
+              port: 5000
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health/liveness
+              port: 5000
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"] # Let PM2/Socket.io finish draining existing connections before force close
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scholar-websocket-svc
+  namespace: scholar-prod
+  labels:
+    app: scholar-websocket
+spec:
+  selector:
+    app: scholar-websocket
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: scholar-websocket-hpa
+  namespace: scholar-prod
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: scholar-websocket
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    # Scale WebSockets primarily based on memory, as long-lived sockets maintain in-memory connection tables
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: scholar-websocket-pdb
+  namespace: scholar-prod
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: scholar-websocket

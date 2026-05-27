@@ -6,6 +6,17 @@ const http = require('http');
 
 console.log('🏁 Starting E2E Compiler Validation & Production Client Bundle Checks...');
 
+// Mock environment variables for compiler testing
+process.env.NODE_ENV = 'production';
+process.env.JWT_SECRET = 'ci-verification-unsafe-jwt-secret-antigravity';
+process.env.MONGO_URI = 'mongodb://localhost:27017/ci-test-db';
+process.env.REDIS_URL = 'redis://localhost:6379';
+process.env.CLIENT_URL = 'http://localhost:3000';
+process.env.STRIPE_API_KEY = 'sk_test_verify_build_mock_key';
+process.env.STRIPE_WEBHOOK_SECRET = 'whsec_verify_build_mock_key';
+process.env.STRIPE_MONTHLY_PRICE_ID = 'price_monthly_verify_build_mock';
+process.env.STRIPE_YEARLY_PRICE_ID = 'price_yearly_verify_build_mock';
+
 try {
   // 1. Validate Express backend compiles and boots correctly
   console.log('📦 Step 1: Booting server module compilation checks...');

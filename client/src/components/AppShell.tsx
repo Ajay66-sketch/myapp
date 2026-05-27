@@ -44,11 +44,21 @@ export function AppShell({ children }: AppShellProps) {
 
           <NotificationDropdown />
 
-          <button onClick={toggleTheme} className="nav-icon-btn glass-panel" title="Toggle Theme">
+          <button
+            onClick={toggleTheme}
+            className="nav-icon-btn glass-panel"
+            title="Toggle Theme"
+            aria-label={`Toggle theme mode. Current: ${themeMode}`}
+          >
             {themeMode === 'dark' ? '☀️' : '🌙'}
           </button>
 
-          <button onClick={logout} className="btn btn-secondary btn-sm" title="Log Out">
+          <button
+            onClick={logout}
+            className="btn btn-secondary btn-sm"
+            title="Log Out"
+            aria-label="Log out of account focus workspace"
+          >
             🚪 Out
           </button>
         </div>
@@ -56,7 +66,7 @@ export function AppShell({ children }: AppShellProps) {
 
       {/* ─── Main Sidebar & Workspace pane ────────────────────────────────────── */}
       <div className="workspace-layout">
-        <aside className="workspace-sidebar glass-panel">
+        <aside className="workspace-sidebar glass-panel" aria-label="Workspace Sidebar Navigation">
           <button
             className={`sidebar-nav-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
             onClick={() => setActiveTab('dashboard')}
@@ -75,9 +85,17 @@ export function AppShell({ children }: AppShellProps) {
           >
             🏆 Leaderboard
           </button>
+          {user.tier === 'admin' && (
+            <button
+              className={`sidebar-nav-btn ${activeTab === 'admin' ? 'active' : ''}`}
+              onClick={() => setActiveTab('admin' as any)}
+            >
+              👑 Revenue & Admin
+            </button>
+          )}
         </aside>
 
-        <main className="workspace-content">
+        <main className="workspace-content" role="main" aria-label="Active workspace content panel">
           {children}
         </main>
       </div>

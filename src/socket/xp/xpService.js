@@ -5,6 +5,7 @@ const coreEventBus = require('../../core/eventBus');
 const presenceService = require('../presence/presenceService');
 const xpService = require('../../services/xpService');
 const authStore = require('../../utils/authStore');
+const AnalyticsService = require('../../services/analyticsService');
 
 const getIO = () => require('../../socket').getIO();
 
@@ -37,6 +38,12 @@ async function handleTimerComplete({ roomId, timer }) {
                 // Push real-time stats update back to client
                 io.to(currentUserId.toString()).emit('user:stats_update', {
                   totalFocusMinutes: user.stats.totalFocusMinutes,
+                });
+
+                // Track server-side pomodoro_completed event in PostHog
+                await AnalyticsService.track('pomodoro_completed', currentUserId, {
+                  durationMinutes: minutes,
+                  roomId
                 });
               }
             } catch (dbErr) {

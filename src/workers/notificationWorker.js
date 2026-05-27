@@ -1,52 +1,18 @@
 // src/workers/notificationWorker.js
-const { Worker } = require('bullmq');
-const { connection } = require('../queue/notificationQueue');
-const Notification = require('../models/Notification');
-const { getIO } = require('../socket');
-const mongoose = require('mongoose');
+// Dedicated background worker process to consume and process system notifications and comeback nudges
 
-const notificationWorker = new Worker('notifications', async (job) => {
-  if (job.name === 'comeback_nudge') {
-    const { userId, username } = job.data;
-    
-    // Check if user is already online to avoid sending a comeback notification while they are active
-    // For MVP, we'll just insert the notification and push it to socket if they somehow connect immediately
-    const title = 'We miss your focus!';
-    const message = `Hey ${username}, it's been a day since your last session. Keep your streak alive!`;
-    const type = 'comeback';
+const notificationQueue = require('../queue/notificationQueue');
+const connectDB = require('../config/db');
 
-    // Save to DB
-    let notification = null;
-    if (mongoose.connection.readyState === 1) {
-      notification = await Notification.create({
-        userId,
-        type,
-        title,
-        message
-      });
-    } else {
-      notification = { _id: Date.now().toString(), type, title, message, isRead: false, createdAt: new Date() };
-    }
+// 1. Establish database connection in worker context
+connectDB();
 
-    // Try to emit via Socket.io if they are online
-    try {
-      const io = getIO();
-      // We would emit to the user's specific room:
-      io.to(`user:${userId}`).emit('notification:received', notification);
-    } catch (err) {
-      // socket not ready or user offline
-    }
-
-    return notification;
-  }
-}, { connection });
-
-notificationWorker.on('completed', (job) => {
-  console.log(`[Notification Worker] Job ${job.id} completed successfully`);
+// 2. Instantiate and boot worker
+const worker = notificationQueue.createWorker({
+  concurrency: process.env.NOTIFICATION_WORKER_CONCURRENCY ? parseInt(process.env.NOTIFICATION_WORKER_CONCURRENCY) : 5,
+  timeoutMs: 15000 // 15s safety threshold for email/push processing
 });
 
-notificationWorker.on('failed', (job, err) => {
-  console.error(`[Notification Worker] Job ${job.id} failed:`, err.message);
-});
+console.log('👷 [Notification Background Worker] Bootstrapped successfully. Awaiting jobs...');
 
-module.exports = notificationWorker;
+module.exports = worker;

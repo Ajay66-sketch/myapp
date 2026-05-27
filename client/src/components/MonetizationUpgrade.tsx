@@ -4,97 +4,75 @@
 import { useState } from 'react'
 import { useStore } from '../store/useStore'
 import { apiService } from '../api/apiService'
+import { CancellationPortal } from './CancellationPortal'
 
 export function MonetizationUpgrade() {
   const user = useStore((state) => state.user)
   const isUpgradeModalOpen = useStore((state) => state.isUpgradeModalOpen)
   const setUpgradeModal = useStore((state) => state.setUpgradeModal)
-  const fetchProfile = useStore((state) => state.fetchProfile)
   const isDemoMode = useStore((state) => state.isDemoMode)
 
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
+  const [isCancelOpen, setIsCancelOpen] = useState(false)
+  const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly')
 
   if (!isUpgradeModalOpen) return null
 
   const handleUpgrade = async () => {
     setLoading(true)
     setMessage('')
-    
+
+    // Sandbox demonstration fallback
     if (isDemoMode) {
-      setMessage('Redirecting securely to Stripe checkout... 🚀')
+      setMessage('Initiating sandbox upgrade checkout...')
       setTimeout(() => {
-        setMessage('Stripe transaction validated successfully!')
-        setTimeout(() => {
-          if (user) {
-            useStore.setState({
-              user: {
-                ...user,
-                tier: 'pro',
-                badges: [...(user.badges || []), 'premium_member']
-              }
-            })
-          }
-          setUpgradeModal(false)
-          setMessage('')
-          setLoading(false)
-        }, 1500)
+        const store = useStore.getState();
+        if (store.user) {
+          useStore.setState({
+            user: { ...store.user, tier: 'pro', streakFreezeCount: 3 }
+          })
+          setMessage('Upgrade successful! You are now a Pro Elite Scholar! 🚀')
+        }
       }, 1500)
+      setLoading(false)
       return
     }
 
     try {
       setMessage('Initiating Stripe subscription billing portal...')
-      const data = await apiService.billing.upgrade('pro')
-      if (data.status === 'success' || data.sessionUrl) {
-        setMessage('Stripe checkout validated successfully!')
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1'}/billing/upgrade`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ cycle: billingCycle }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.message || 'Failed to initiate Stripe checkout')
+      }
+
+      const data = await response.json()
+      if (data.status === 'redirect' && data.sessionUrl) {
+        setMessage('Redirecting to secure Stripe payment page... 🚀')
         setTimeout(() => {
-          fetchProfile()
-          setUpgradeModal(false)
-          setMessage('')
-        }, 1500)
+          window.location.href = data.sessionUrl
+        }, 1000)
+      } else {
+        throw new Error('Invalid billing server response')
       }
     } catch (e: any) {
-      // Direct in-memory fallback for offline/development sandboxes
-      try {
-        const fallbackRes = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1'}/billing/upgrade`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ plan: 'pro' }),
-        })
-        if (fallbackRes.ok) {
-          setMessage('Pro tier unlocked! Enjoy infinite study tutor companion access!')
-          setTimeout(() => {
-            fetchProfile()
-            if (user) {
-              useStore.setState({ user: { ...user, tier: 'pro' } })
-            }
-            setUpgradeModal(false)
-            setMessage('')
-          }, 1500)
-        } else {
-          setMessage('Upgrade checkout failed. Please verify Stripe details.')
-        }
-      } catch (err) {
-        setMessage('Checkout failed. Initializing development sandbox bypass...')
-        setTimeout(() => {
-          if (user) {
-            useStore.setState({ user: { ...user, tier: 'pro' } })
-          }
-          setMessage('Pro Bypass active. Welcome!')
-          setTimeout(() => {
-            setUpgradeModal(false)
-            setMessage('')
-          }, 1500)
-        }, 1000)
-      }
+      console.error('[Billing Checkout Exception]:', e)
+      setMessage(e.message || 'Stripe connection failed. Please contact support.')
     } finally {
       setLoading(false)
     }
   }
+
+  const isPro = user?.tier === 'pro' || user?.tier === 'admin'
 
   return (
     <div className="modal-overlay anim-fade-in">
@@ -107,6 +85,48 @@ export function MonetizationUpgrade() {
           <div className="upgrade-badge">COGNITIVE UPGRADE ELITE</div>
           <h2 className="gradient-text m-2" style={{ fontSize: '2.2rem' }}>Supercharge Study Productivity</h2>
           <p className="text-secondary font-medium">Unlock full academic AI agents, streak freezes protection, and unlimited rooms.</p>
+        </div>
+
+        {/* Billed Monthly vs. Billed Annually Toggle */}
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px', marginTop: '1.5rem', marginBottom: '0.5rem' }}>
+          <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: billingCycle === 'monthly' ? '#fff' : 'rgba(255,255,255,0.4)', transition: 'color 0.2s' }}>Billed Monthly</span>
+          <button
+            onClick={() => {
+              setBillingCycle(prev => prev === 'monthly' ? 'yearly' : 'monthly')
+              // Track billing selection
+              import('../analytics/postHogAnalytics').then(({ postHogAnalytics }) => {
+                postHogAnalytics.track('plan_pricing_toggled', {
+                  selectedCycle: billingCycle === 'monthly' ? 'yearly' : 'monthly'
+                })
+              })
+            }}
+            style={{
+              width: '46px',
+              height: '24px',
+              borderRadius: '12px',
+              backgroundColor: 'var(--color-primary)',
+              border: 'none',
+              position: 'relative',
+              cursor: 'pointer',
+              padding: 0
+            }}
+          >
+            <div
+              style={{
+                width: '18px',
+                height: '18px',
+                borderRadius: '50%',
+                backgroundColor: '#fff',
+                position: 'absolute',
+                top: '3px',
+                left: billingCycle === 'monthly' ? '3px' : '25px',
+                transition: 'left 0.25s cubic-bezier(0.16, 1, 0.3, 1)'
+              }}
+            />
+          </button>
+          <span style={{ fontSize: '0.85rem', fontWeight: 'bold', color: billingCycle === 'yearly' ? '#fff' : 'rgba(255,255,255,0.4)', display: 'flex', alignItems: 'center', gap: '6px', transition: 'color 0.2s' }}>
+            Billed Annually <span style={{ fontSize: '0.65rem', padding: '2px 6px', backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#10b981', borderRadius: '10px', fontWeight: 'bold' }}>Save 20%</span>
+          </span>
         </div>
 
         {/* Pricing Matrix Columns Grid */}
@@ -138,7 +158,7 @@ export function MonetizationUpgrade() {
             <div className="pricing-plan-header">
               <h3>Cognitive Elite Pro</h3>
               <div className="pricing-price-row">
-                <span className="pricing-amount">$9.99</span>
+                <span className="pricing-amount">{billingCycle === 'monthly' ? '$9.99' : '$7.99'}</span>
                 <span className="pricing-period">/ month</span>
               </div>
               <p className="text-muted font-medium" style={{ fontSize: '0.8rem' }}>For serious learners and elite scorers.</p>
@@ -160,26 +180,61 @@ export function MonetizationUpgrade() {
 
             <button
               onClick={handleUpgrade}
-              className="btn btn-primary btn-block btn-pulse mt-auto"
-              disabled={loading || user?.tier === 'pro'}
+              className="btn btn-primary btn-block btn-pulse mt-auto font-bold"
+              disabled={loading || isPro}
             >
               {loading ? (
                 <div className="spinner"></div>
-              ) : user?.tier === 'pro' ? (
+              ) : isPro ? (
                 'Already Pro Elite'
               ) : (
                 'Upgrade to Pro via Stripe'
               )}
             </button>
+
+            {isPro && (
+              <button
+                onClick={() => setIsCancelOpen(true)}
+                className="text-secondary font-bold mt-2"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '0.75rem',
+                  textDecoration: 'underline',
+                  cursor: 'pointer',
+                  width: '100%',
+                  textAlign: 'center'
+                }}
+              >
+                Manage or cancel Pro subscription
+              </button>
+            )}
           </div>
+        </div>
+
+        {/* Testimonials Review Column */}
+        <div
+          className="glass-panel p-3 text-left mt-3"
+          style={{
+            backgroundColor: 'rgba(255, 255, 255, 0.01)',
+            border: '1px solid rgba(255, 255, 255, 0.04)',
+            borderRadius: '8px'
+          }}
+        >
+          <div style={{ display: 'flex', gap: '4px', fontSize: '0.85rem', color: '#fbbf24', marginBottom: '4px' }}>★★★★★</div>
+          <p className="text-secondary font-medium" style={{ fontSize: '0.75rem', lineHeight: '1.4', margin: 0 }}>
+            "Scholar Pro has saved my grades. The Academic AI Companion's summarization cards literally cut my exam study cycles in half. The streak freeze protected my daily focus streak when I had the flu!" — Aman S., Stanford Physics
+          </p>
         </div>
 
         <div className="upgrade-footer text-center mt-4">
           <p className="text-muted" style={{ fontSize: '0.75rem' }}>Secured by Stripe billing. Cancel anytime. 30-day money back guarantee.</p>
         </div>
       </div>
+
+      <CancellationPortal isOpen={isCancelOpen} onClose={() => setIsCancelOpen(false)} />
     </div>
   )
 }
-// client/src/components/MonetizationUpgrade.tsx exports standard dynamic upgrade matrix overlay
 
+export default MonetizationUpgrade

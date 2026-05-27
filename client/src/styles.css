@@ -1507,3 +1507,8 @@ h1, h2, h3, h4, h5, h6 {
   box-shadow: 0 10px 25px rgba(245, 158, 11, 0.4);
 }
 
+/* Smooth global layout transitions for dark/light mode toggling */
+body, header, aside, main, .glass-panel, .btn, input, span, p, a, h1, h2, h3, h4, h5, h6 {
+  transition: background-color 0.25s ease, border-color 0.25s ease, color 0.2s ease, box-shadow 0.25s ease;
+}
+

@@ -1,54 +1,18 @@
 // src/workers/aiWorker.js
-const { Worker } = require('bullmq');
-const { connection } = require('../queue/aiQueue');
-const User = require('../models/User');
-const FocusSession = require('../models/FocusSession');
-const AiInsight = require('../models/AiInsight');
-const aiCoachService = require('../services/aiCoachService');
-const { getIO } = require('../socket');
+// Dedicated background worker process to consume and process intensive AI Coach LLM tasks
 
-const aiWorker = new Worker('ai-coach', async (job) => {
-  if (job.name === 'generate_summary') {
-    const { userId, sessionId } = job.data;
-    
-    // 1. Gather context
-    const user = await User.findById(userId);
-    if (!user) throw new Error('User not found');
+const { aiQueue } = require('../queue/aiQueue');
+const connectDB = require('../config/db');
 
-    // Fetch last 10 sessions for context
-    const recentSessions = await FocusSession.find({ userId })
-      .sort({ createdAt: -1 })
-      .limit(10);
+// 1. Establish database connection in worker context
+connectDB();
 
-    // 2. Call OpenAI Service
-    const insightData = await aiCoachService.generateSessionSummary(user, recentSessions);
-
-    // 3. Save Insight to Database
-    const insight = await AiInsight.create({
-      userId,
-      type: insightData.type,
-      content: insightData.content
-    });
-
-    // 4. Emit Realtime Notification via Socket.IO
-    try {
-      const io = getIO();
-      // Emitting broadly to user's personal channel
-      io.emit(`user:${userId}:ai_nudge`, insight);
-    } catch (err) {
-      console.log('Socket.io not available to emit insight dynamically right now.');
-    }
-
-    return insight;
-  }
-}, { connection });
-
-aiWorker.on('completed', (job) => {
-  console.log(`[AI Worker] Job ${job.id} completed successfully`);
+// 2. Instantiate and boot worker
+const worker = aiQueue.createWorker({
+  concurrency: process.env.AI_WORKER_CONCURRENCY ? parseInt(process.env.AI_WORKER_CONCURRENCY) : 2,
+  timeoutMs: 90000 // 90s safety threshold for external LLM API processing
 });
 
-aiWorker.on('failed', (job, err) => {
-  console.error(`[AI Worker] Job ${job.id} failed:`, err.message);
-});
+console.log('👷 [AI Coach Background Worker] Bootstrapped successfully. Awaiting jobs...');
 
-module.exports = aiWorker;
+module.exports = worker;

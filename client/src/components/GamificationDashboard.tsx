@@ -3,6 +3,9 @@
 
 import { useEffect, useState } from 'react'
 import { useStore } from '../store/useStore'
+import { ActivationChecklist } from './ActivationChecklist'
+import { EmptyState } from './EmptyState'
+import { ReferralOnboarding } from './ReferralOnboarding'
 
 export function GamificationDashboard() {
   const user = useStore((state) => state.user)
@@ -13,6 +16,7 @@ export function GamificationDashboard() {
   const [boardTab, setBoardTab] = useState<'daily' | 'weekly' | 'allTime' | 'xp'>('xp')
   const [activePanel, setActivePanel] = useState<'profile' | 'analytics'>('profile')
   const [loading, setLoading] = useState(true)
+  const [isReferralOpen, setIsReferralOpen] = useState(false)
 
   useEffect(() => {
     const loadData = async () => {
@@ -79,6 +83,7 @@ export function GamificationDashboard() {
         {/* PANEL A: SCHOLAR PROFILE */}
         {activePanel === 'profile' && (
           <div className="gamify-card glass-panel profile-card">
+            <ActivationChecklist />
             <div className="user-profile-header">
               <img
                 src={user.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'}
@@ -91,6 +96,13 @@ export function GamificationDashboard() {
                 <span className={`premium-label ${user.tier === 'pro' ? 'pro-label' : 'free-label'}`}>
                   ⚡ {user.tier.toUpperCase()} MEMBER
                 </span>
+                <button
+                  onClick={() => setIsReferralOpen(true)}
+                  className="btn btn-secondary btn-sm mt-2 font-bold"
+                  style={{ display: 'block', fontSize: '0.75rem', padding: '4px 10px' }}
+                >
+                  🤝 Invite Peers & Earn +50 XP
+                </button>
               </div>
             </div>
 
@@ -266,10 +278,15 @@ export function GamificationDashboard() {
                 </div>
               ))
             ) : activeLeaderboard.length === 0 ? (
-              <div className="leaderboard-empty glass-panel text-center">
-                <span>💤</span>
-                <p>No scholar logs compiled yet. Complete a Pomodoro block to claim rank #1!</p>
-              </div>
+              <EmptyState
+                icon="💤"
+                title="No Study Records Found"
+                description="No scholar logs compiled yet. Complete a Pomodoro focus block to claim rank #1 on the board!"
+                actionText="Start Focus Corridor Session 🚀"
+                onAction={() => {
+                  useStore.setState({ activeTab: 'rooms' });
+                }}
+              />
             ) : (
               activeLeaderboard.map((item, index) => {
                 const isCurrentUser = item._id === user._id
@@ -304,6 +321,7 @@ export function GamificationDashboard() {
           </div>
         </div>
       </div>
+      <ReferralOnboarding isOpen={isReferralOpen} onClose={() => setIsReferralOpen(false)} />
     </div>
   )
 }

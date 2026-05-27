@@ -1,25 +1,22 @@
-// src/middleware/monetization.js
-// Express middleware for checking Pro tier, Admin status, and plan feature access
-
-const { findUserById } = require('../utils/authStore');
+const userRepository = require('../repositories/UserRepository');
 const { getPlan, hasFeature } = require('../utils/permissions');
 const { logAuditEvent } = require('../utils/auditLogger');
 
 /**
- * Helper to fetch the most up-to-date user state from DB or memory fallback.
+ * Helper to fetch the most up-to-date user state from UserRepository (caching layer).
  * Prevents issues with stale JWT tokens when subscription tiers are mutated.
  */
 async function getUpToDateUser(req) {
   if (req.user && req.user._id) {
     try {
-      const freshUser = await findUserById(req.user._id);
+      const freshUser = await userRepository.get(req.user._id.toString());
       if (freshUser) {
         return typeof freshUser.toSafeObject === 'function'
           ? freshUser.toSafeObject()
           : freshUser;
       }
     } catch (error) {
-      console.error('[Monetization Middleware] Failed to load up-to-date user:', error);
+      console.error('[Monetization Middleware] Failed to load up-to-date user from cache/DB:', error);
     }
   }
   return req.user;

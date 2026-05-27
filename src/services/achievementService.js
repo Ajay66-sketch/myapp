@@ -50,13 +50,21 @@ async function checkAndUnlock(userId, achievementKey) {
     // Persist user modifications
     await authStore.saveUser(user);
 
-    // 1. Audit Log Unlock
+    // 1. Audit Log Unlock & PostHog Telemetry
     logAuditEvent({
       action: 'achievement_unlocked',
       userId: userStr,
       resource: `achievement:${achievement.key}`,
       success: true,
       metadata: { title: achievement.title, xpReward: achievement.xpReward },
+    });
+
+    const AnalyticsService = require('./analyticsService');
+    await AnalyticsService.track('achievement_unlocked', userStr, {
+      achievementKey: achievement.key,
+      title: achievement.title,
+      xpReward: achievement.xpReward,
+      badge: achievement.badge || ''
     });
 
     // 2. Award Achievement XP bonus

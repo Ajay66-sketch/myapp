@@ -6,6 +6,10 @@ import { LandingPage } from './components/LandingPage'
 import { DemoSimulator } from './components/DemoSimulator'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { OfflineBanner } from './components/OfflineBanner'
+import { KeyboardShortcuts } from './components/KeyboardShortcuts'
+import { AchievementUnlocked } from './components/AchievementUnlocked'
+import { AdminRevenueDashboard } from './components/AdminRevenueDashboard'
+import { UsageMeterDashboard } from './components/UsageMeterDashboard'
 import './styles.css'
 
 // Lazy load heavy dashboard, timer room views, and billing drawers to optimize main bundle loads
@@ -70,11 +74,12 @@ function App() {
     <>
       <ErrorBoundary>
         <AppShell>
-          <div className="app-workspace-panel anim-fade-in">
+          <div className="app-workspace-panel anim-fade-in" role="region" aria-live="polite" aria-label="Study Workspace Active Tab Panel">
             <Suspense fallback={<PageSkeleton />}>
               {activeTab === 'dashboard' && (
                 <div className="dashboard-layout">
                   <div className="dashboard-main-content">
+                    <UsageMeterDashboard />
                     <GamificationDashboard />
                   </div>
                   <div className="dashboard-ai-sidebar">
@@ -99,6 +104,12 @@ function App() {
                   <GamificationDashboard />
                 </div>
               )}
+
+              {activeTab === ('admin' as any) && (
+                <div className="admin-layout-tab glass-panel">
+                  <AdminRevenueDashboard />
+                </div>
+              )}
             </Suspense>
           </div>
 
@@ -113,6 +124,10 @@ function App() {
           </Suspense>
         </AppShell>
       </ErrorBoundary>
+
+      {/* Global Onboarding & Engagement Listeners */}
+      <KeyboardShortcuts />
+      <AchievementUnlocked />
 
       {/* Global Connection Health alerts */}
       <OfflineBanner />

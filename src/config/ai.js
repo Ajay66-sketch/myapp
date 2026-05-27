@@ -39,9 +39,30 @@ module.exports = {
     url: 'https://api.openai.com/v1/chat/completions',
   },
 
+  anthropic: {
+    apiKey: process.env.ANTHROPIC_API_KEY || '',
+    model: process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-20241022',
+    url: process.env.ANTHROPIC_URL || 'https://api.anthropic.com/v1/messages',
+  },
+
+  gemini: {
+    apiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '',
+    model: process.env.GEMINI_MODEL || 'gemini-1.5-pro',
+    url: process.env.GEMINI_URL || 'https://generativelanguage.googleapis.com/v1beta/models',
+  },
+
   local: {
     model: process.env.LOCAL_MODEL || 'llama3',
     url: process.env.LOCAL_LLM_URL || 'http://localhost:11434/v1/chat/completions',
+  },
+
+  // Automatic provider failover order
+  failoverChain: ['openai', 'gemini', 'anthropic'],
+
+  // Semantic caching parameters
+  semanticCache: {
+    threshold: parseFloat(process.env.AI_SEMANTIC_THRESHOLD || '0.90'),
+    maxKeys: parseInt(process.env.AI_SEMANTIC_MAX_KEYS || '100', 10),
   },
 
   // Base system directives for contextual operations

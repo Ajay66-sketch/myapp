@@ -1,0 +1,79 @@
+# render.yaml
+# Production Render Blueprint for Scholar Platform
+# High-availability configuration with auto-scaling background workers
+
+services:
+  # 1. Primary API and WebSockets server
+  - type: web
+    name: scholar-api-prod
+    env: node
+    plan: starter # Cost-efficient starter tier for early-stage startup
+    buildCommand: npm install
+    startCommand: node src/server.js
+    healthCheckPath: /api/health
+    numInstances: 1
+    autoDeploy: false
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: API_PORT
+        value: 5000
+      - key: MONGO_URI
+        sync: false # Set in Render Dashboard from MongoDB Atlas
+      - key: MONGO_POOL_SIZE
+        value: "50"
+      - key: REDIS_URL
+        sync: false # Set in Render Dashboard from Managed Redis
+      - key: JWT_SECRET
+        generateValue: true # Generates secure key if not explicitly set
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_SAME_SITE
+        value: "strict"
+      - key: DISABLE_CSRF
+        value: "false"
+      - key: TRUST_PROXIES
+        value: "1"
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false # e.g. https://scholarplatform.com
+      - key: CLIENT_URL
+        sync: false
+      - key: STRIPE_API_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_MONTHLY_PRICE_ID
+        sync: false
+      - key: STRIPE_YEARLY_PRICE_ID
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: LOG_LEVEL
+        value: info
+      - key: OTEL_SERVICE_NAME
+        value: scholar-backend-production
+
+  # 2. BullMQ Background Worker Service
+  - type: worker
+    name: scholar-worker-prod
+    env: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: node src/workers/index.js
+    numInstances: 1
+    autoDeploy: false
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: LOG_LEVEL
+        value: info
+      - key: OTEL_SERVICE_NAME
+        value: scholar-worker-production

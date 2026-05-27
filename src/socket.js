@@ -8,6 +8,7 @@ const { createAdapter } = require('@socket.io/redis-adapter');
 const Redis = require('ioredis');
 const { createRedisClient } = require('./config/redisClient');
 
+const prometheus = require('./metrics/prometheus');
 const auth = require('./socket/auth');
 const env = require('./config/env');
 const status = require('./config/status');
@@ -61,10 +62,10 @@ const initSocket = (server) => {
       allowedHeaders: ['Content-Type', 'Authorization'],
       credentials: true,
     },
-    transports: ['websocket', 'polling'],
+    transports: ['websocket'],
   });
 
-  console.log('Socket.IO transport configured: websocket + polling');
+  console.log('Socket.IO transport hardened: websocket exclusively');
   status.setSocketLoaded();
   notificationService.setIoInstance(io);
 
@@ -192,10 +193,12 @@ const initSocket = (server) => {
     socket.onAny((event) => {
       status.recordSocketEventReceived();
       eventBusInstance.emit('socket:incoming', 'info', { socketId: socket.id, event }, userId);
+      prometheus.websocketEventsTotal.inc({ event, direction: 'incoming' });
     });
     socket.onAnyOutgoing((event) => {
       status.recordSocketEventSent();
       eventBusInstance.emit('socket:outgoing', 'info', { socketId: socket.id, event }, userId);
+      prometheus.websocketEventsTotal.inc({ event, direction: 'outgoing' });
     });
 
     // Track user in onlineUsers
@@ -545,4 +548,11 @@ const getIO = () => {
   return io;
 };
 
-module.exports = { initSocket, getIO };
+/**
+ * Get shared Redis client instance
+ */
+const getRedisClient = () => {
+  return redisClientInstance;
+};
+
+module.exports = { initSocket, getIO, getRedisClient };

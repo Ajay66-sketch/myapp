@@ -1,0 +1,44 @@
+# .github/workflows/security-scan.yml
+# Continuous Security Integration: Dependency vulnerability audits and static secrets scanning
+
+name: Security Scan
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  npm-audit:
+    name: Dependency Vulnerability Scan (NPM Audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Install Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-node: '18'
+
+      - name: Audit Production Dependencies
+        run: |
+          npm audit --audit-level=high
+
+  secrets-scan:
+    name: Secrets & Credentials Scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # Full git history required for secrets scanning
+
+      - name: Run Trivy Secrets scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          security-checks: 'secret'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1' # Fail pipeline if hardcoded credentials are found

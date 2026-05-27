@@ -76,8 +76,8 @@ const generateRefreshToken = (user) => {
 };
 
 const setAuthCookies = (res, accessToken, refreshToken) => {
-  const isProduction = process.env.NODE_ENV === 'production';
-  const secureCookie = isProduction || process.env.COOKIE_SECURE === 'true';
+  const isProdOrStaging = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
+  const secureCookie = isProdOrStaging || process.env.COOKIE_SECURE === 'true';
   const sameSiteSetting = process.env.COOKIE_SAME_SITE || 'strict';
   const cookieDomain = process.env.COOKIE_DOMAIN || undefined;
 
@@ -191,7 +191,7 @@ router.post('/google', async (req, res) => {
 
 const handleRegister = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, referralCode } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({ message: 'Name, email, and password are required' });
@@ -219,6 +219,58 @@ const handleRegister = async (req, res) => {
 
     user.refreshToken = refreshToken;
     await saveUser(user);
+
+    // ─── Referral conversion and rewards ──────────────────────────────────────────
+    if (referralCode) {
+      try {
+        let referrer = null;
+        
+        // Find referrer by matching formatted username
+        const mongoose = require('mongoose');
+        const User = require('../models/User');
+        if (mongoose.connection && mongoose.connection.readyState === 1) {
+          const users = await User.find({});
+          referrer = users.find(u => `SCHOLAR-REF-${u.username.toUpperCase().replace(/\s+/g, '-')}` === referralCode.toUpperCase());
+        } else {
+          // Fallback/in-memory
+          const authStore = require('../utils/authStore');
+          const allUsers = await authStore.getAllUsers();
+          referrer = allUsers.find(u => `SCHOLAR-REF-${u.username.toUpperCase().replace(/\s+/g, '-')}` === referralCode.toUpperCase());
+        }
+
+        if (referrer) {
+          user.referralSource = referralCode;
+          await saveUser(user);
+
+          // Save Referral record
+          const Referral = require('../models/Referral');
+          await Referral.create({
+            referrerId: referrer._id,
+            referredUserId: user._id,
+            referralCodeUsed: referralCode,
+            status: 'rewarded',
+            rewardTokensAwarded: 50
+          });
+
+          // Award Dual-Sided Focus Surge (+50 XP) rewards
+          const xpService = require('../services/xpService');
+          await xpService.awardXp(referrer._id, 50);
+          await xpService.awardXp(user._id, 50);
+
+          // Track referral_converted event in PostHog
+          const AnalyticsService = require('../services/analyticsService');
+          await AnalyticsService.track('referral_converted', user._id.toString(), {
+            referrerId: referrer._id.toString(),
+            referralCode,
+            rewardTokensAwarded: 50
+          });
+
+          console.log(`🎯 Referral processed: ${referrer.username} referred ${user.username}. Both awarded +50 XP!`);
+        }
+      } catch (err) {
+        console.warn('⚠️ [Referral Processing] Failed to reward referral loop:', err.message);
+      }
+    }
 
     await registerSessionInRedis(user._id.toString(), refreshToken, req);
 

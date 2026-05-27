@@ -44,30 +44,6 @@ spec:
           volumeMounts:
             - name: mongo-data
               mountPath: /data/db
-        - name: bootstrap
-          image: mongo:6.0
-          command:
-            - "bash"
-            - "-c"
-            - |
-              echo "Waiting for replica set nodes to start..."
-              sleep 15
-              mongosh --host mongodb-replicaset-0.mongodb-replicaset-svc:27017 --eval "
-                try {
-                  rs.status();
-                  print('Replica set rs0 already initialized.');
-                } catch(e) {
-                  print('Initializing replica set rs0...');
-                  rs.initiate({
-                    _id: 'rs0',
-                    members: [
-                      { _id: 0, host: 'mongodb-replicaset-0.mongodb-replicaset-svc:27017' },
-                      { _id: 1, host: 'mongodb-replicaset-1.mongodb-replicaset-svc:27017' },
-                      { _id: 2, host: 'mongodb-replicaset-2.mongodb-replicaset-svc:27017' }
-                    ]
-                  });
-                }
-              "
   volumeClaimTemplates:
     - metadata:
         name: mongo-data
@@ -89,3 +65,45 @@ spec:
       targetPort: 27017
   selector:
     app: mongodb-replicaset
+---
+# SRE-grade One-Time Job to initialize MongoDB replica set safely
+# Eliminates CrashLoopBackOff that occurred with a standard sidecar!
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongodb-replicaset-bootstrap
+  namespace: scholar-prod
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: mongo:6.0
+          command:
+            - "bash"
+            - "-c"
+            - |
+              echo "Waiting for replica set nodes to start..."
+              until mongosh --host mongodb-replicaset-0.mongodb-replicaset-svc.scholar-prod.svc.cluster.local:27017 --eval "db.runCommand({ping: 1})" &>/dev/null; do
+                echo "Waiting for mongodb-replicaset-0..."
+                sleep 2
+              done
+              
+              mongosh --host mongodb-replicaset-0.mongodb-replicaset-svc.scholar-prod.svc.cluster.local:27017 --eval "
+                try {
+                  const status = rs.status();
+                  print('Replica set rs0 already initialized: ' + status.set);
+                } catch(e) {
+                  print('Initializing replica set rs0...');
+                  const res = rs.initiate({
+                    _id: 'rs0',
+                    members: [
+                      { _id: 0, host: 'mongodb-replicaset-0.mongodb-replicaset-svc.scholar-prod.svc.cluster.local:27017' },
+                      { _id: 1, host: 'mongodb-replicaset-1.mongodb-replicaset-svc.scholar-prod.svc.cluster.local:27017' },
+                      { _id: 2, host: 'mongodb-replicaset-2.mongodb-replicaset-svc.scholar-prod.svc.cluster.local:27017' }
+                    ]
+                  });
+                  print(JSON.stringify(res));
+                }
+              "

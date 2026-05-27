@@ -1,14 +1,13 @@
 // src/routes/metrics.js
-// Enterprise-grade Prometheus scraping metrics router
+// Enterprise-grade Prometheus scraping metrics router using prom-client
 
 const express = require('express');
 const mongoose = require('mongoose');
-const { getMetricsData } = require('../middleware/requestMetrics');
+const prometheus = require('../metrics/prometheus');
 const aiMetrics = require('../metrics/aiMetrics');
+const { getRedisClient } = require('../config/redisClient');
 
 const router = express.Router();
-
-const { getRedisClient } = require('../config/redisClient');
 
 const getRedisStatus = () => {
   try {
@@ -32,86 +31,63 @@ const getActiveSockets = () => {
   }
 };
 
-router.get('/metrics', (req, res) => {
-  const { requestCounts, requestDurations } = getMetricsData();
-  const uptime = process.uptime();
-  const rss = process.memoryUsage().rss;
-  const activeSockets = getActiveSockets();
-  const redisConnected = getRedisStatus();
-  const mongoConnected = getMongoStatus();
+router.get('/metrics', async (req, res) => {
+  try {
+    // Dynamically update gauges just before rendering
+    prometheus.websocketConnectionsActive.set(getActiveSockets());
+    
+    const redisVal = getRedisStatus();
+    const mongoVal = getMongoStatus();
+    
+    // Set Database connection gauges
+    let dbGauge = prometheus.register.getSingleMetric('database_connected');
+    if (!dbGauge) {
+      dbGauge = new (require('prom-client').Gauge)({
+        name: 'database_connected',
+        help: 'Status of DB connection systems.',
+        labelNames: ['system'],
+        registers: [prometheus.register]
+      });
+    }
+    dbGauge.set({ system: 'mongodb' }, mongoVal);
+    dbGauge.set({ system: 'redis' }, redisVal);
 
-  let responseText = '';
+    // Set AI Cache stats
+    let cacheHitsGauge = prometheus.register.getSingleMetric('ai_cache_hits_total');
+    if (!cacheHitsGauge) {
+      cacheHitsGauge = new (require('prom-client').Gauge)({
+        name: 'ai_cache_hits_total',
+        help: 'Total API responses served from AI cache.',
+        registers: [prometheus.register]
+      });
+    }
+    cacheHitsGauge.set(aiMetrics.getCacheHits ? aiMetrics.getCacheHits() : 0);
 
-  // 1. System Info
-  responseText += `# HELP process_uptime Uptime of the Node.js process in seconds.\n`;
-  responseText += `# TYPE process_uptime gauge\n`;
-  responseText += `process_uptime ${uptime}\n\n`;
+    let cacheMissesGauge = prometheus.register.getSingleMetric('ai_cache_misses_total');
+    if (!cacheMissesGauge) {
+      cacheMissesGauge = new (require('prom-client').Gauge)({
+        name: 'ai_cache_misses_total',
+        help: 'Total AI cache misses.',
+        registers: [prometheus.register]
+      });
+    }
+    cacheMissesGauge.set(aiMetrics.getCacheMisses ? aiMetrics.getCacheMisses() : 0);
 
-  responseText += `# HELP process_memory_rss Resident set size in bytes.\n`;
-  responseText += `# TYPE process_memory_rss gauge\n`;
-  responseText += `process_memory_rss ${rss}\n\n`;
+    let cacheRatioGauge = prometheus.register.getSingleMetric('ai_cache_hit_ratio');
+    if (!cacheRatioGauge) {
+      cacheRatioGauge = new (require('prom-client').Gauge)({
+        name: 'ai_cache_hit_ratio',
+        help: 'AI cache hit ratio.',
+        registers: [prometheus.register]
+      });
+    }
+    cacheRatioGauge.set(aiMetrics.getCacheHitRatio ? aiMetrics.getCacheHitRatio() : 0);
 
-  // 2. Database Health
-  responseText += `# HELP database_connected Status of DB connection systems.\n`;
-  responseText += `# TYPE database_connected gauge\n`;
-  responseText += `database_connected{system="mongodb"} ${mongoConnected}\n`;
-  responseText += `database_connected{system="redis"} ${redisConnected}\n\n`;
-
-  // 3. Socket Connections
-  responseText += `# HELP socket_connections_active Number of active socket connections.\n`;
-  responseText += `# TYPE socket_connections_active gauge\n`;
-  responseText += `socket_connections_active ${activeSockets}\n\n`;
-
-  // 4. HTTP Metrics
-  responseText += `# HELP http_requests_total Total number of HTTP requests processed.\n`;
-  responseText += `# TYPE http_requests_total counter\n`;
-  requestCounts.forEach((count, key) => {
-    const [method, route, status] = key.split(':');
-    responseText += `http_requests_total{method="${method}",route="${route}",status="${status}"} ${count}\n`;
-  });
-  responseText += `\n`;
-
-  responseText += `# HELP http_request_duration_seconds Summary of request latency in seconds.\n`;
-  responseText += `# TYPE http_request_duration_seconds summary\n`;
-  requestDurations.forEach((sum, key) => {
-    const [method, route, status] = key.split(':');
-    const count = requestCounts.get(key) || 0;
-    responseText += `http_request_duration_seconds_sum{method="${method}",route="${route}",status="${status}"} ${sum}\n`;
-    responseText += `http_request_duration_seconds_count{method="${method}",route="${route}",status="${status}"} ${count}\n`;
-  });
-
-  responseText += `\n`;
-
-  // 5. AI Cache and Provider Metrics
-  responseText += `# HELP ai_cache_hits_total Total API responses served from AI cache.\n`;
-  responseText += `# TYPE ai_cache_hits_total counter\n`;
-  responseText += `ai_cache_hits_total ${aiMetrics.getCacheHits()}\n`;
-
-  responseText += `# HELP ai_cache_misses_total Total AI cache misses.\n`;
-  responseText += `# TYPE ai_cache_misses_total counter\n`;
-  responseText += `ai_cache_misses_total ${aiMetrics.getCacheMisses()}\n`;
-
-  responseText += `# HELP ai_cache_hit_ratio AI cache hit ratio.\n`;
-  responseText += `# TYPE ai_cache_hit_ratio gauge\n`;
-  responseText += `ai_cache_hit_ratio ${aiMetrics.getCacheHitRatio()}\n`;
-
-  const latencyMetrics = aiMetrics.getProviderLatencyMetrics();
-  responseText += `# HELP ai_provider_latency_seconds_sum Total provider latency sum in seconds.\n`;
-  responseText += `# TYPE ai_provider_latency_seconds_sum gauge\n`;
-  responseText += `ai_provider_latency_seconds_sum ${latencyMetrics.sumSeconds}\n`;
-  responseText += `# HELP ai_provider_latency_seconds_count Total number of provider latency observations.\n`;
-  responseText += `# TYPE ai_provider_latency_seconds_count counter\n`;
-  responseText += `ai_provider_latency_seconds_count ${latencyMetrics.totalCount}\n`;
-
-  responseText += `# HELP ai_provider_latency_seconds_bucket Provider latency histogram buckets in seconds.\n`;
-  responseText += `# TYPE ai_provider_latency_seconds_bucket histogram\n`;
-  Object.entries(latencyMetrics.buckets).forEach(([label, count]) => {
-    const [provider, bucket] = label.split(':');
-    responseText += `ai_provider_latency_seconds_bucket{provider="${provider}",le="${bucket}"} ${count}\n`;
-  });
-
-  res.set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
-  res.send(responseText);
+    res.set('Content-Type', prometheus.register.contentType);
+    res.send(await prometheus.register.metrics());
+  } catch (err) {
+    res.status(500).end(err.message);
+  }
 });
 
 module.exports = router;

@@ -22,12 +22,12 @@ const csrfProtection = (req, res, next) => {
   let csrfCookieToken = req.cookies?.csrfToken;
   if (!csrfCookieToken) {
     csrfCookieToken = generateCsrfToken();
-    const isProduction = process.env.NODE_ENV === 'production';
+    const isProdOrStaging = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
     
     // Set cookie. Must NOT be httpOnly so that frontend client code can read it and send it back as a header!
     res.cookie('csrfToken', csrfCookieToken, {
       httpOnly: false, // Must be false for double-submit cookie pattern
-      secure: isProduction || process.env.COOKIE_SECURE === 'true',
+      secure: isProdOrStaging || process.env.COOKIE_SECURE === 'true',
       sameSite: 'lax',
       maxAge: 24 * 60 * 60 * 1000, // 24 hours
     });

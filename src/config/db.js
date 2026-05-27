@@ -1,25 +1,44 @@
 // src/config/db.js
-// MongoDB connection using Mongoose
+// MongoDB connection configuration with strict production pre-boot validation and auto-reconnect enforcements
 
 const mongoose = require('mongoose');
 
 const connectDB = async () => {
+  const isProdOrStaging = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
+
   if (!process.env.MONGO_URI) {
-    console.log('   [MongoDB] Not configured. Starting with in-memory storage.');
+    if (isProdOrStaging) {
+      console.error('❌ [FATAL] MONGO_URI is missing in production/staging! Refusing startup to prevent split-brain states.');
+      process.exit(1);
+    }
+    console.log('   [MongoDB] Not configured. Starting with local in-memory storage.');
     return false;
   }
 
   try {
     const conn = await mongoose.connect(process.env.MONGO_URI, {
-      maxPoolSize: process.env.MONGO_POOL_SIZE || 50,
-      serverSelectionTimeoutMS: 5000,
+      maxPoolSize: parseInt(process.env.MONGO_POOL_SIZE || '50', 10),
+      minPoolSize: isProdOrStaging ? 10 : 2, // Retain hot connection pool in production/staging
+      serverSelectionTimeoutMS: 5000, // Fail fast during startup checks
       socketTimeoutMS: 45000,
+      autoIndex: true, // Auto build indexes
+      retryWrites: true,
+      w: 'majority',
+      heartbeatFrequencyMS: isProdOrStaging ? 10000 : 30000, // Keep connection hot
+      readPreference: 'secondaryPreferred',
     });
+    
     console.log(`   ✅ MongoDB connected: ${conn.connection.host}`);
     return conn.connection.host;
   } catch (error) {
-    console.log(`   [MongoDB] Connection unavailable: ${error.message}`);
-    console.log('   [MongoDB] Continuing with in-memory storage.');
+    console.error(`❌ [MongoDB] Connection failed: ${error.message}`);
+    
+    if (isProdOrStaging) {
+      console.error('❌ [FATAL] MongoDB is offline during production/staging startup! Refusing server boot.');
+      process.exit(1);
+    }
+
+    console.log('   [MongoDB] Continuing with local in-memory storage fallback.');
     return false;
   }
 };

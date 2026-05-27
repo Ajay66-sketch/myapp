@@ -109,6 +109,14 @@ const userSchema = new mongoose.Schema(
       focusDuration: { type: Number, default: 25 },
       breakDuration: { type: Number, default: 5 },
     },
+    referralSource: {
+      type: String,
+      default: 'organic',
+    },
+    disableTracking: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true, // adds createdAt and updatedAt
@@ -156,6 +164,8 @@ userSchema.methods.toSafeObject = function () {
     blockedUsers: this.blockedUsers,
     stats: this.stats,
     preferences: this.preferences,
+    referralSource: this.referralSource || 'organic',
+    disableTracking: !!this.disableTracking,
     createdAt: this.createdAt,
   };
 };

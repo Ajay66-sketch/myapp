@@ -1,5 +1,6 @@
 // src/utils/authStore.js
 // Shared auth storage helpers for MongoDB or in-memory fallback mode
+// Hardened to completely forbid dangerous in-memory fallbacks in production and staging environments
 
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
@@ -8,11 +9,18 @@ const User = require('../models/User');
 const inMemoryUsers = new Map();
 let inMemoryModeWarned = false;
 
-const isDbAvailable = () => mongoose.connection.readyState === 1;
+const isDbAvailable = () => mongoose.connection && mongoose.connection.readyState === 1;
+
+const isProductionOrStaging = () => {
+  return process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
+};
 
 const warnInMemoryMode = () => {
+  if (isProductionOrStaging()) {
+    throw new Error('❌ DATABASE CONNECTION OUTAGE: In-memory store fallback is prohibited in production/staging to prevent data inconsistency.');
+  }
   if (!inMemoryModeWarned) {
-    console.warn('⚠️ Running auth in memory mode (dev only)');
+    console.warn('⚠️ Running auth in memory mode (dev/test only)');
     inMemoryModeWarned = true;
   }
 };
@@ -26,6 +34,10 @@ const findUserByEmail = async (email) => {
     return User.findOne({ email: normalizedEmail });
   }
 
+  if (isProductionOrStaging()) {
+    throw new Error('❌ DATABASE CONNECTION OUTAGE: User lookup failed. MongoDB is currently offline.');
+  }
+
   warnInMemoryMode();
   return Array.from(inMemoryUsers.values()).find((user) => user.email === normalizedEmail) || null;
 };
@@ -33,6 +45,10 @@ const findUserByEmail = async (email) => {
 const findUserById = async (id) => {
   if (isDbAvailable()) {
     return User.findById(id);
+  }
+
+  if (isProductionOrStaging()) {
+    throw new Error('❌ DATABASE CONNECTION OUTAGE: User retrieval failed. MongoDB is currently offline.');
   }
 
   warnInMemoryMode();
@@ -44,6 +60,10 @@ const findUserByUsername = async (username) => {
     return User.findOne({ username });
   }
 
+  if (isProductionOrStaging()) {
+    throw new Error('❌ DATABASE CONNECTION OUTAGE: Username query failed. MongoDB is currently offline.');
+  }
+
   warnInMemoryMode();
   return Array.from(inMemoryUsers.values()).find((user) => user.username === username) || null;
 };
@@ -51,6 +71,10 @@ const findUserByUsername = async (username) => {
 const findUserByGoogleId = async (googleId) => {
   if (isDbAvailable()) {
     return User.findOne({ googleId });
+  }
+
+  if (isProductionOrStaging()) {
+    throw new Error('❌ DATABASE CONNECTION OUTAGE: Google ID authentication failed. MongoDB is currently offline.');
   }
 
   warnInMemoryMode();
@@ -62,6 +86,10 @@ const createUser = async ({ _id, username, email, password, googleId, avatar }) 
 
   if (isDbAvailable()) {
     return User.create({ _id, username, email: normalizedEmail, password, googleId, avatar });
+  }
+
+  if (isProductionOrStaging()) {
+    throw new Error('❌ DATABASE CONNECTION OUTAGE: User registration failed. MongoDB write operations are disabled when offline.');
   }
 
   warnInMemoryMode();
@@ -99,6 +127,8 @@ const createUser = async ({ _id, username, email, password, googleId, avatar }) 
       focusDuration: 25,
       breakDuration: 5,
     },
+    referralSource: 'organic',
+    disableTracking: false,
     createdAt: new Date(),
     comparePassword: async function (candidatePassword) {
       return bcrypt.compare(candidatePassword, this.password);
@@ -124,6 +154,8 @@ const createUser = async ({ _id, username, email, password, googleId, avatar }) 
         blockedUsers: this.blockedUsers,
         stats: this.stats,
         preferences: this.preferences,
+        referralSource: this.referralSource || 'organic',
+        disableTracking: !!this.disableTracking,
         createdAt: this.createdAt,
       };
     },
@@ -136,6 +168,10 @@ const createUser = async ({ _id, username, email, password, googleId, avatar }) 
 const saveUser = async (user) => {
   if (isDbAvailable() && typeof user.save === 'function') {
     return user.save();
+  }
+
+  if (isProductionOrStaging()) {
+    throw new Error('❌ DATABASE CONNECTION OUTAGE: User update failed. MongoDB write operations are disabled when offline.');
   }
 
   warnInMemoryMode();
@@ -151,6 +187,11 @@ const getAllUsers = async () => {
     const User = require('../models/User');
     return User.find({});
   }
+
+  if (isProductionOrStaging()) {
+    throw new Error('❌ DATABASE CONNECTION OUTAGE: Comprehensive user retrieval failed. MongoDB is currently offline.');
+  }
+
   warnInMemoryMode();
   return Array.from(inMemoryUsers.values());
 };

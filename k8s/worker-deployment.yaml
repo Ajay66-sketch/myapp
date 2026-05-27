@@ -1,0 +1,87 @@
+# k8s/worker-deployment.yaml
+# Production Kubernetes Deployment configurations for background BullMQ Workers
+# Implements targeted queue scaling, SRE resource bounds, and pre-stop graceful drain hooks.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scholar-worker-ai-coach
+  namespace: scholar-prod
+  labels:
+    app: scholar-worker-ai-coach
+spec:
+  replicas: 2 # Scale independently based on AI usage/load
+  selector:
+    matchLabels:
+      app: scholar-worker-ai-coach
+  template:
+    metadata:
+      labels:
+        app: scholar-worker-ai-coach
+    spec:
+      containers:
+        - name: worker
+          image: antigravity/scholar-backend:latest
+          command: ["node", "src/workers/index.js"]
+          args: ["--queue=ai-coach"]
+          resources:
+            limits:
+              cpu: "1000m"
+              memory: "1536Mi" # Give more memory for context-heavy AI tasks
+            requests:
+              cpu: "500m"
+              memory: "768Mi"
+          env:
+            - name: QUEUE_NAME
+              value: "ai-coach"
+            - name: AI_WORKER_CONCURRENCY
+              value: "4"
+          envFrom:
+            - configMapRef:
+                name: scholar-config
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"] # Allow PM2/process to complete active tasks before SIGKILL
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scholar-worker-notifications
+  namespace: scholar-prod
+  labels:
+    app: scholar-worker-notifications
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: scholar-worker-notifications
+  template:
+    metadata:
+      labels:
+        app: scholar-worker-notifications
+    spec:
+      containers:
+        - name: worker
+          image: antigravity/scholar-backend:latest
+          command: ["node", "src/workers/index.js"]
+          args: ["--queue=system-notifications"]
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+          env:
+            - name: QUEUE_NAME
+              value: "system-notifications"
+            - name: NOTIFICATION_WORKER_CONCURRENCY
+              value: "10"
+          envFrom:
+            - configMapRef:
+                name: scholar-config
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]

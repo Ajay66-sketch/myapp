@@ -1,11 +1,12 @@
 // src/utils/roomStore.js
-// Dynamic storage abstraction for Rooms and Messages with automatic, safe MongoDB fallback
+// Dynamic storage abstraction for Rooms and Messages with strict production fail-safe constraints
+// Hardened to completely forbid split-brain in-memory fallbacks in production and staging environments
 
 const mongoose = require('mongoose');
 const Room = require('../models/Room');
 const RoomMessage = require('../models/RoomMessage');
 
-// In-memory data structures for fallback storage when MongoDB is offline
+// In-memory data structures for fallback storage when MongoDB is offline (development/testing only)
 const inMemoryRooms = new Map();     // key: roomId (string), value: Room object
 const inMemoryMessages = [];         // Array of Message objects
 
@@ -19,22 +20,33 @@ function isDbAvailable() {
 }
 
 /**
+ * Verify if the application is running in production or staging mode.
+ */
+function isProductionOrStaging() {
+  return process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
+}
+
+/**
+ * Enforce database availability in production/staging.
+ */
+function assertDatabaseAvailable(operationName) {
+  if (isProductionOrStaging()) {
+    if (!isDbAvailable()) {
+      throw new Error(`❌ DATABASE CONNECTION OUTAGE: Operation '${operationName}' aborted. MongoDB is offline in production/staging.`);
+    }
+  }
+}
+
+/**
  * Create a new study/chat room.
- * 
- * @param {object} param0 - Room parameters
- * @param {string} param0.name - Display name of room
- * @param {string} param0.slug - Unique url-friendly slug
- * @param {string} param0.ownerId - User ID of the owner/creator
- * @param {string} [param0.tierRequired='free'] - Minimum required plan tier
- * @param {boolean} [param0.isPrivate=false] - Whether room is private
- * @returns {Promise<object>} Created room object
  */
 async function createRoom({ name, slug, ownerId, tierRequired = 'free', isPrivate = false }) {
   const normSlug = String(slug).trim().toLowerCase();
 
+  assertDatabaseAvailable('createRoom');
+
   if (isDbAvailable()) {
     try {
-      // In MongoDB, the creator is added as the initial member
       const room = await Room.create({
         name: name.trim(),
         slug: normSlug,
@@ -45,6 +57,9 @@ async function createRoom({ name, slug, ownerId, tierRequired = 'free', isPrivat
       });
       return room;
     } catch (error) {
+      if (isProductionOrStaging()) {
+        throw error; // Propagate database constraint/validation errors directly in production/staging
+      }
       console.warn('[RoomStore] MongoDB creation failed, trying memory fallback...', error.message);
     }
   }
@@ -77,19 +92,21 @@ async function createRoom({ name, slug, ownerId, tierRequired = 'free', isPrivat
 
 /**
  * Find room configuration by its identifier.
- * 
- * @param {string} id - The room identifier
- * @returns {Promise<object|null>}
  */
 async function findRoomById(id) {
   if (!id) return null;
   const idStr = id.toString();
+
+  assertDatabaseAvailable('findRoomById');
 
   if (isDbAvailable()) {
     try {
       const room = await Room.findById(idStr);
       if (room) return room;
     } catch (error) {
+      if (isProductionOrStaging()) {
+        throw error;
+      }
       console.warn('[RoomStore] Room findById query failed, falling back to memory search...');
     }
   }
@@ -99,19 +116,21 @@ async function findRoomById(id) {
 
 /**
  * Find room config by its unique slug.
- * 
- * @param {string} slug - The url slug key
- * @returns {Promise<object|null>}
  */
 async function findRoomBySlug(slug) {
   if (!slug) return null;
   const normSlug = String(slug).trim().toLowerCase();
+
+  assertDatabaseAvailable('findRoomBySlug');
 
   if (isDbAvailable()) {
     try {
       const room = await Room.findOne({ slug: normSlug });
       if (room) return room;
     } catch (error) {
+      if (isProductionOrStaging()) {
+        throw error;
+      }
       console.warn('[RoomStore] Room findOne slug query failed, falling back to memory search...');
     }
   }
@@ -127,15 +146,18 @@ async function findRoomBySlug(slug) {
 
 /**
  * Query all non-private rooms.
- * 
- * @returns {Promise<Array>} List of public rooms
  */
 async function findRooms() {
+  assertDatabaseAvailable('findRooms');
+
   if (isDbAvailable()) {
     try {
       const rooms = await Room.find({ isPrivate: false }).sort({ createdAt: -1 });
       return rooms;
     } catch (error) {
+      if (isProductionOrStaging()) {
+        throw error;
+      }
       console.warn('[RoomStore] Rooms find query failed, falling back to memory query...');
     }
   }
@@ -147,26 +169,26 @@ async function findRooms() {
     }
   }
 
-  // Sort by createdAt descending
   return list.sort((a, b) => b.createdAt - a.createdAt);
 }
 
 /**
  * Count how many rooms are currently owned/created by a specific user.
- * Used for enforcing monetization tier limits.
- * 
- * @param {string} ownerId - Owner's user ID
- * @returns {Promise<number>} Number of owned rooms
  */
 async function countRoomsByOwnerId(ownerId) {
   if (!ownerId) return 0;
   const ownerStr = ownerId.toString();
+
+  assertDatabaseAvailable('countRoomsByOwnerId');
 
   if (isDbAvailable()) {
     try {
       const count = await Room.countDocuments({ ownerId: ownerStr });
       return count;
     } catch (error) {
+      if (isProductionOrStaging()) {
+        throw error;
+      }
       console.warn('[RoomStore] countDocuments query failed, falling back to memory count...');
     }
   }
@@ -183,15 +205,13 @@ async function countRoomsByOwnerId(ownerId) {
 
 /**
  * Add a member user to a room's roster.
- * 
- * @param {string} roomId - Room identifier
- * @param {string} userId - User identifier to append
- * @returns {Promise<object|null>} The updated room instance
  */
 async function addMemberToRoom(roomId, userId) {
   if (!roomId || !userId) return null;
   const roomStr = roomId.toString();
   const userStr = userId.toString();
+
+  assertDatabaseAvailable('addMemberToRoom');
 
   if (isDbAvailable()) {
     try {
@@ -202,6 +222,9 @@ async function addMemberToRoom(roomId, userId) {
       );
       if (room) return room;
     } catch (error) {
+      if (isProductionOrStaging()) {
+        throw error;
+      }
       console.warn('[RoomStore] addMemberToRoom DB update failed, trying memory update...');
     }
   }
@@ -220,17 +243,11 @@ async function addMemberToRoom(roomId, userId) {
 
 /**
  * Persist a chat message inside a room.
- * 
- * @param {object} param0 - Message parameters
- * @param {string} param0.roomId - Room identifier
- * @param {string} param0.userId - Message author's user ID
- * @param {string} param0.username - Username of author
- * @param {string} param0.message - Clean sanitized message content
- * @param {string} [param0.type='chat'] - Message type key (chat or system)
- * @returns {Promise<object>} Persisted message object
  */
 async function createMessage({ roomId, userId, username, message, type = 'chat' }) {
   const cleanMessage = String(message).trim();
+
+  assertDatabaseAvailable('createMessage');
 
   if (isDbAvailable()) {
     try {
@@ -243,6 +260,9 @@ async function createMessage({ roomId, userId, username, message, type = 'chat' 
       });
       return msg;
     } catch (error) {
+      if (isProductionOrStaging()) {
+        throw error;
+      }
       console.warn('[RoomStore] Message creation in DB failed, trying memory fallback...', error.message);
     }
   }
@@ -264,56 +284,53 @@ async function createMessage({ roomId, userId, username, message, type = 'chat' 
 
 /**
  * Fetch chronological historical messages for a room.
- * 
- * @param {string} roomId - Room identifier
- * @param {number} [limit=50] - Number of historical items to retrieve
- * @returns {Promise<Array>}
  */
 async function findMessagesByRoomId(roomId, limit = 50) {
   if (!roomId) return [];
   const roomStr = roomId.toString();
+
+  assertDatabaseAvailable('findMessagesByRoomId');
 
   if (isDbAvailable()) {
     try {
       const messages = await RoomMessage.find({ roomId: roomStr })
         .sort({ createdAt: -1 })
         .limit(limit);
-      
-      // Mongoose returns newest first when sorted by -1. We reverse to keep chronological order
       return messages.reverse();
     } catch (error) {
+      if (isProductionOrStaging()) {
+        throw error;
+      }
       console.warn('[RoomStore] Message history DB query failed, falling back to memory scan...');
     }
   }
 
-  // Search in memory messages
   const filtered = inMemoryMessages.filter((msg) => msg.roomId === roomStr);
-  
-  // Take the last N messages (filtered is naturally chronological)
   const chunk = filtered.slice(-limit);
   return chunk;
 }
 
 /**
  * Manually update and save a room configuration.
- * 
- * @param {object} room - The room object
- * @returns {Promise<object>}
  */
 async function saveRoom(room) {
   if (!room || !room._id) return null;
   const idStr = room._id.toString();
+
+  assertDatabaseAvailable('saveRoom');
 
   if (isDbAvailable() && typeof room.save === 'function') {
     try {
       const saved = await room.save();
       return saved;
     } catch (error) {
+      if (isProductionOrStaging()) {
+        throw error;
+      }
       console.warn('[RoomStore] Room DB save() failed, syncing fallback store...');
     }
   }
 
-  // Update in memory map
   const plainObj = room.toObject ? room.toObject() : room;
   plainObj.updatedAt = new Date();
   inMemoryRooms.set(idStr, plainObj);
@@ -328,11 +345,16 @@ async function markMessageDelivered(messageId, userId) {
   const msgStr = messageId.toString();
   const userStr = userId.toString();
 
+  assertDatabaseAvailable('markMessageDelivered');
+
   if (isDbAvailable()) {
     try {
       const RoomMessage = require('../models/RoomMessage');
       await RoomMessage.findByIdAndUpdate(msgStr, { $addToSet: { deliveredTo: userStr } });
     } catch (e) {
+      if (isProductionOrStaging()) {
+        throw e;
+      }
       console.error('[RoomStore] Failed to update delivered status:', e);
     }
   } else {
@@ -354,11 +376,16 @@ async function markMessageSeen(messageId, userId) {
   const msgStr = messageId.toString();
   const userStr = userId.toString();
 
+  assertDatabaseAvailable('markMessageSeen');
+
   if (isDbAvailable()) {
     try {
       const RoomMessage = require('../models/RoomMessage');
       await RoomMessage.findByIdAndUpdate(msgStr, { $addToSet: { seenBy: userStr } });
     } catch (e) {
+      if (isProductionOrStaging()) {
+        throw e;
+      }
       console.error('[RoomStore] Failed to update seen status:', e);
     }
   } else {

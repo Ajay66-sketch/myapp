@@ -12,9 +12,79 @@ const { loadVaultSecrets } = require('./config/vault');
 
 const isVercel = Boolean(process.env.VERCEL);
 
+async function validateStartupDependencies() {
+  const isProdOrStaging = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
+  if (!isProdOrStaging) {
+    console.log('⚠️ Running in development/testing mode; skipping strict startup dependency validation.');
+    return;
+  }
+
+  console.log('🔍 [Startup check] Validating production/staging dependencies...');
+
+  // 1. Validate MongoDB
+  const mongoHost = await connectDB();
+  if (!mongoHost) {
+    console.error('❌ [Startup check] MongoDB is required in production/staging but is offline! Boot halted.');
+    process.exit(1);
+  }
+  status.setDatabaseConnected(true, mongoHost);
+
+  // 2. Validate Redis
+  const { getRedisClient } = require('./config/redisClient');
+  const redisClient = getRedisClient();
+  
+  if (!redisClient) {
+    console.error('❌ [Startup check] Redis client could not be instantiated in production/staging! Boot halted.');
+    process.exit(1);
+  }
+
+  // Wait up to 5 seconds for Redis to become ready
+  const checkRedisReady = () => {
+    return new Promise((resolve) => {
+      if (redisClient.status === 'ready') return resolve(true);
+      
+      const onReady = () => {
+        cleanup();
+        resolve(true);
+      };
+      
+      const onError = (err) => {
+        cleanup();
+        resolve(false);
+      };
+      
+      const timer = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, 5000);
+      
+      function cleanup() {
+        clearTimeout(timer);
+        redisClient.removeListener('ready', onReady);
+        redisClient.removeListener('error', onError);
+      }
+      
+      redisClient.once('ready', onReady);
+      redisClient.once('error', onError);
+    });
+  };
+
+  const redisReady = await checkRedisReady();
+  if (!redisReady) {
+    console.error(`❌ [Startup check] Redis is required but is offline (current status: ${redisClient.status})! Boot halted.`);
+    process.exit(1);
+  }
+
+  status.setRedisConnected(true);
+  console.log('✅ [Startup check] All production startup dependencies online.');
+}
+
 async function startServer() {
   // Load secrets from HashiCorp Vault dynamically at runtime
   await loadVaultSecrets();
+
+  // Run strict SRE dependency validations
+  await validateStartupDependencies();
 
   const explicitPort = process.env.API_PORT || process.env.BACKEND_PORT;
   const fallbackPort = process.env.PORT && process.env.PORT !== '3000' ? process.env.PORT : undefined;
@@ -29,15 +99,24 @@ async function startServer() {
     }
   }
 
-  const hasMongo = Boolean(process.env.MONGO_URI);
-  if (hasMongo) {
-    connectDB().then((host) => {
+  // Bind non-production database connection fallbacks if not already verified
+  const isProdOrStaging = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
+  if (!isProdOrStaging) {
+    const hasMongo = Boolean(process.env.MONGO_URI);
+    if (hasMongo) {
+      const host = await connectDB().catch(() => null);
       status.setDatabaseConnected(Boolean(host), host);
-    }).catch(() => {
+    } else {
       status.setDatabaseConnected(false);
-    });
-  } else {
-    status.setDatabaseConnected(false);
+    }
+
+    const { getRedisClient } = require('./config/redisClient');
+    const redis = getRedisClient();
+    if (redis) {
+      status.setRedisConnected(redis.status === 'ready');
+      redis.on('ready', () => status.setRedisConnected(true));
+      redis.on('end', () => status.setRedisConnected(false));
+    }
   }
 
   if (!isVercel) {
@@ -55,27 +134,16 @@ async function startServer() {
     });
 
     // ─── Graceful Shutdown ───────────────────────────────────────────────────────
-    const gracefulShutdown = () => {
-      console.log('🛑 Received shutdown signal. Closing server...');
+    const gracefulShutdown = (signal = 'SIGTERM') => {
+      console.log(`🛑 Received shutdown signal [${signal}]. Closing HTTP server...`);
       
       serverInstance.close(async () => {
         console.log('HTTP server closed.');
-        
         try {
-          const mongoose = require('mongoose');
-          if (mongoose.connection.readyState === 1) {
-            await mongoose.connection.close();
-            console.log('MongoDB connection closed.');
-          }
-
-          // Gracefully shutdown OpenTelemetry SDK
-          const sdk = require('./telemetry/tracing');
-          await sdk.shutdown();
-          console.log('[OTel Tracing] OpenTelemetry SDK terminated.');
-
-          process.exit(0);
+          const { initiateGracefulShutdown } = require('./core/shutdownManager');
+          await initiateGracefulShutdown(signal);
         } catch (err) {
-          console.error('Error during shutdown:', err);
+          console.error('Error during shutdownManager sequence:', err);
           process.exit(1);
         }
       });
@@ -87,8 +155,8 @@ async function startServer() {
       }, 10000);
     };
 
-    process.on('SIGTERM', gracefulShutdown);
-    process.on('SIGINT', gracefulShutdown);
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
   } else {
     console.log('📦 Running in Vercel production mode');
     console.log('   HTTP server creation is disabled. Exporting Express app.');

@@ -6,6 +6,7 @@ const achievementService = require('./achievementService');
 const notificationService = require('./notificationService');
 const xpService = require('./xpService');
 const { logAuditEvent } = require('../utils/auditLogger');
+const AnalyticsService = require('./analyticsService');
 
 /**
  * Record user focus activity and evaluate study streak metrics.
@@ -123,6 +124,18 @@ async function recordStreakActivity(userId) {
       success: true,
       metadata: { currentStreak: user.stats.currentStreak, longestStreak: user.stats.longestStreak, freezeUsed, comebackAwarded },
     });
+
+    // Track streak freeze usage or lost streaks in PostHog
+    if (freezeUsed) {
+      await AnalyticsService.track('streak_freeze_used', userStr, {
+        currentStreak: user.stats.currentStreak,
+        remainingFreezes: user.streakFreezeCount
+      });
+    } else if (newStreak === 1 && originalStreak > 1) {
+      await AnalyticsService.track('streak_lost', userStr, {
+        lostStreakDays: originalStreak
+      });
+    }
 
     // Emit Realtime event
     const socketModule = require('../socket');

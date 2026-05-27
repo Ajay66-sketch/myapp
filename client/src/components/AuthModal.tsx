@@ -29,10 +29,11 @@ export function AuthModal() {
     } else {
       if (!email || !password || !name) return setErr('Please fill in all fields')
       try {
-        await register({ name, email, password })
+        const referralCode = localStorage.getItem('capturedReferralCode') || undefined
+        await register({ name, email, password, referralCode })
         setSuccessMsg('Account created successfully!')
         const { postHogAnalytics } = await import('../analytics/postHogAnalytics')
-        postHogAnalytics.track('user_signed_up', { name, email })
+        postHogAnalytics.track('user_signed_up', { name, email, referralCode })
       } catch (e: any) {
         setErr(e.message || 'Registration failed')
       }

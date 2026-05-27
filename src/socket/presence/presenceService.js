@@ -8,6 +8,7 @@ const rateLimiter = require('../rateLimiter');
 const auth = require('../auth');
 const status = require('../../config/status');
 const coreEventBus = require('../../core/eventBus');
+const AnalyticsService = require('../../services/analyticsService');
 
 const onlineUsers = new Map(); // socket.id -> { userId, username, roomId, status, lastSeen }
 const roomsState = new Map(); // roomId -> { timer: {...}, participants: Set }
@@ -130,6 +131,9 @@ async function handleRoomJoin(socket, data, ack) {
     success: true,
     metadata: { roomId },
   });
+
+  // Track room joining in PostHog
+  AnalyticsService.track('room_joined', socket.data.userId, { roomId });
 
   coreEventBus.emit('presence:room_joined', { socket, userId: socket.data.userId, roomId });
 

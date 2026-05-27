@@ -23,6 +23,11 @@ const billingRoutes = require('./routes/billing');
 const roomsRoutes = require('./routes/rooms');
 const { router: aiRoutes } = require('./routes/ai');
 const gamificationRoutes = require('./routes/gamification');
+const complianceRoutes = require('./routes/compliance');
+const adminMetricsRoutes = require('./routes/adminMetrics');
+const discordRoutes = require('./routes/discord');
+const socraticRoutes = require('./routes/socratic');
+const { rateLimitHandler, checkIpBan } = require('./middleware/rateLimitBanning');
 const env = require('./config/env');
 const status = require('./config/status');
 
@@ -45,6 +50,9 @@ env.validateApiEnv();
 
 const { startRedisHealthMonitor } = require('./telemetry/redisHealth');
 startRedisHealthMonitor(5000);
+
+// Enforce proactive IP Ban verification at gateway entry
+app.use(checkIpBan);
 
 const trustProxiesEnv = process.env.TRUST_PROXIES;
 if (trustProxiesEnv) {
@@ -129,13 +137,14 @@ app.use(csrfProtection);
 // Prefix API routes with versioning (/api/v1) for easier future updates and backward compatibility
 const API_VERSION = '/api/v1';
 
-// Global Rate Limiter
+// Global Rate Limiter with automated Redis-backed IP abuse banning
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per `window` (here, per 15 minutes)
-  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
-  message: { error: 'Too many requests from this IP, please try again after 15 minutes' }
+  max: 100, // Limit each IP to 100 requests per `window`
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Too many requests from this IP, please try again after 15 minutes',
+  handler: rateLimitHandler
 });
 
 // Apply rate limiter to all API routes
@@ -158,28 +167,118 @@ app.use(`${API_VERSION}/ai`, aiRoutes);
 app.use('/ai', aiRoutes);
 app.use(`${API_VERSION}/gamification`, gamificationRoutes);
 app.use('/gamification', gamificationRoutes);
+app.use(`${API_VERSION}/compliance`, complianceRoutes);
+app.use(`${API_VERSION}/admin/billing`, adminMetricsRoutes);
+app.use(`${API_VERSION}/discord`, discordRoutes);
+app.use(`${API_VERSION}/socratic`, socraticRoutes);
+app.use('/socratic', socraticRoutes);
+
+// Register RFC 9116 security researcher contact details endpoint
+app.get('/.well-known/security.txt', (req, res) => {
+  res.type('text/plain');
+  res.send(
+    `Contact: mailto:security@scholarplatform.com\n` +
+    `Expires: 2027-05-27T02:00:00.000Z\n` +
+    `Encryption: https://scholarplatform.com/security-pgp.asc\n` +
+    `Policy: https://scholarplatform.com/security-policy\n`
+  );
+});
 
 status.setAuthLoaded();
 
-// ─── Health & Diagnostic ─────────────────────────────────────────────────────
+// ─── Health & Diagnostic Probes (SRE-grade Kubernetes-compliant) ─────────────
 
-const buildStatusResponse = () => {
+// 1. Central Comprehensive Health Diagnostic
+app.get('/api/health', async (req, res) => {
+  const mongoose = require('mongoose');
+  const { getRedisClient } = require('./config/redisClient');
+  
+  const mongoConnected = mongoose.connection && mongoose.connection.readyState === 1;
+  const redis = getRedisClient();
+  const redisConnected = redis && redis.status === 'ready';
+  
+  // Collect queue statuses
+  const aiTutorQueue = require('./queue/aiTutorQueue');
+  const notificationQueue = require('./queue/notificationQueue');
+  const telemetryQueue = require('./queue/telemetryQueue');
+  const analyticsQueue = require('./queue/analyticsQueue');
+  const { aiQueue } = require('./queue/aiQueue');
+
+  const queues = [
+    aiTutorQueue.getMetrics(),
+    notificationQueue.getMetrics(),
+    telemetryQueue.getMetrics(),
+    analyticsQueue.getMetrics(),
+    aiQueue.getMetrics()
+  ];
+
+  // Socket state
+  let socketHealthy = false;
+  let activeConnections = 0;
+  try {
+    const presenceService = require('./socket/presence/presenceService');
+    activeConnections = presenceService.onlineUsers ? presenceService.onlineUsers.size : 0;
+    socketHealthy = status.getStatus().systems.socket.loaded;
+  } catch (e) {}
+
+  const overallHealthy = mongoConnected && (!process.env.REDIS_URL || redisConnected) && socketHealthy;
   const systemStatus = status.getStatus();
-  const healthy = systemStatus.systems.auth.loaded && systemStatus.systems.socket.loaded;
 
-  return {
-    status: healthy ? 'healthy' : 'initializing',
-    timestamp: systemStatus.timestamp,
-    uptime: systemStatus.uptime,
+  res.status(overallHealthy ? 200 : 503).json({
+    status: overallHealthy ? 'healthy' : 'degraded',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
     memory: systemStatus.memory,
-    systems: systemStatus.systems,
     metrics: systemStatus.metrics,
-  };
-};
+    systems: {
+      mongodb: {
+        status: mongoConnected ? 'connected' : 'offline',
+        healthy: mongoConnected
+      },
+      redis: {
+        status: redisConnected ? 'connected' : (process.env.REDIS_URL || process.env.REDIS_HOST ? 'offline' : 'not_configured'),
+        healthy: !process.env.REDIS_URL || redisConnected
+      },
+      websocket: {
+        status: socketHealthy ? 'active' : 'offline',
+        activeConnections,
+        healthy: socketHealthy
+      },
+      queues: {
+        healthy: queues.every(q => !q.bullMqActive || q.bullMqActive),
+        list: queues
+      }
+    }
+  });
+});
 
-app.get('/api/health', (req, res) => {
-  const response = buildStatusResponse();
-  res.status(response.status === 'healthy' ? 200 : 503).json(response);
+// 2. Kubernetes Liveness Probe
+app.get('/api/health/liveness', (req, res) => {
+  res.status(200).json({ status: 'alive', timestamp: new Date().toISOString() });
+});
+
+// 3. Kubernetes Readiness Probe
+app.get('/api/health/readiness', (req, res) => {
+  const mongoose = require('mongoose');
+  const { getRedisClient } = require('./config/redisClient');
+  
+  const mongoConnected = mongoose.connection && mongoose.connection.readyState === 1;
+  const redis = getRedisClient();
+  const redisConnected = redis && redis.status === 'ready';
+  const socketLoaded = status.getStatus().systems.socket.loaded;
+  
+  const isProdOrStaging = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
+  const isReady = mongoConnected && (!isProdOrStaging || redisConnected) && socketLoaded;
+  
+  res.status(isReady ? 200 : 503).json({
+    status: isReady ? 'ready' : 'not_ready',
+    timestamp: new Date().toISOString(),
+    checks: {
+      mongodb: mongoConnected,
+      redis: redisConnected,
+      websocket: socketLoaded
+    }
+  });
 });
 
 // ─── Error Handling ──────────────────────────────────────────────────────────

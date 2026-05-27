@@ -1,7 +1,21 @@
 // client/src/analytics/postHogAnalytics.ts
-// Production analytics event logging client wrapper
+// Production-grade client-side analytics wrapper with referral URL capturing
 
 let postHogApiKey = (window as any).env?.POSTHOG_API_KEY || '';
+
+// Automatically capture and persist referral codes from URLs during session startup
+if (typeof window !== 'undefined') {
+  try {
+    const urlParams = new URLSearchParams(window.location.search);
+    const refCode = urlParams.get('ref') || urlParams.get('referral') || urlParams.get('source');
+    if (refCode) {
+      localStorage.setItem('capturedReferralCode', refCode);
+      console.log(`🎯 Referral source captured: "${refCode}"`);
+    }
+  } catch (err) {
+    // Fail-silent on standard server-side rendering/non-browser scopes
+  }
+}
 
 export const postHogAnalytics = {
   init: (apiKey?: string) => {
@@ -13,10 +27,19 @@ export const postHogAnalytics = {
 
   identify: (userId: string, traits: Record<string, any> = {}) => {
     console.log(`[PostHog Identify] User identified: "${userId}"`, traits);
-    // Secure webhook/batch dispatch to backend analytics
+    
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    
+    const token = localStorage.getItem('accessToken');
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     fetch('/api/v1/analytics/batch', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         events: [
           {
@@ -33,13 +56,18 @@ export const postHogAnalytics = {
   track: (eventName: string, properties: Record<string, any> = {}) => {
     console.log(`[PostHog Track] Event: "${eventName}"`, properties);
     
-    // Batch dispatch directly to our Mongoose Analytics DB
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    
+    const token = localStorage.getItem('accessToken');
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     fetch('/api/v1/analytics/batch', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
-      },
+      headers,
       body: JSON.stringify({
         events: [
           {
