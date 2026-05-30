@@ -16,17 +16,27 @@ const connectDB = async () => {
   }
 
   try {
-    const conn = await mongoose.connect(process.env.MONGO_URI, {
+    const mongoOptions = {
       maxPoolSize: parseInt(process.env.MONGO_POOL_SIZE || '50', 10),
       minPoolSize: isProdOrStaging ? 10 : 2, // Retain hot connection pool in production/staging
       serverSelectionTimeoutMS: 5000, // Fail fast during startup checks
       socketTimeoutMS: 45000,
-      autoIndex: true, // Auto build indexes
       retryWrites: true,
       w: 'majority',
       heartbeatFrequencyMS: isProdOrStaging ? 10000 : 30000, // Keep connection hot
-      readPreference: 'secondaryPreferred',
-    });
+    };
+
+    if (isProdOrStaging) {
+      mongoOptions.readPreference = 'secondaryPreferred';
+      mongoOptions.autoIndex = false; // Disable auto indexing to prevent errors on read-replica
+      mongoOptions.autoCreate = false; // Disable auto collection creation to prevent errors on read-replica
+    } else {
+      // In local development/testing, omit or set to primary to allow autoIndex and autoCreate on standalone Mongo
+      mongoOptions.autoIndex = true;
+      mongoOptions.autoCreate = true;
+    }
+
+    const conn = await mongoose.connect(process.env.MONGO_URI, mongoOptions);
     
     console.log(`   ✅ MongoDB connected: ${conn.connection.host}`);
     return conn.connection.host;
