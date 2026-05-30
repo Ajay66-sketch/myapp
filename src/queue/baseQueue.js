@@ -238,6 +238,45 @@ class ResilientQueue {
       }
     });
 
+    // Start periodic heartbeat updates in Redis for this active worker (Task 6)
+    const startHeartbeat = () => {
+      const redisClient = getRedisClient();
+      if (!redisClient || redisClient.status !== 'ready') return;
+
+      const heartbeatInterval = setInterval(async () => {
+        if (worker.isRunning()) {
+          try {
+            const healthKey = `worker:health:${this.name}:${process.pid}`;
+            const data = {
+              queueName: this.name,
+              pid: process.pid,
+              hostname: require('os').hostname(),
+              status: 'running',
+              lastHeartbeat: Date.now(),
+              concurrency: worker.opts.concurrency || 5,
+            };
+            await redisClient.set(healthKey, JSON.stringify(data), 'EX', 15); // 15-second TTL
+          } catch (e) {
+            console.warn(`[Worker Health] Failed to write heartbeat for ${this.name}:`, e.message);
+          }
+        }
+      }, 5000); // Heartbeat every 5 seconds
+
+      worker.on('closed', () => {
+        clearInterval(heartbeatInterval);
+        // Try to delete key gracefully on exit
+        const key = `worker:health:${this.name}:${process.pid}`;
+        redisClient.del(key).catch(() => {});
+      });
+    };
+
+    const redis = getRedisClient();
+    if (redis && redis.status === 'ready') {
+      startHeartbeat();
+    } else if (redis) {
+      redis.once('ready', startHeartbeat);
+    }
+
     return worker;
   }
 

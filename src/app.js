@@ -12,22 +12,8 @@ const csrfProtection = require('./middleware/csrf');
 const requestSanitizer = require('./middleware/requestSanitizer');
 const cacheControl = require('./middleware/cacheControl');
 
-const authRoutes = require('./routes/auth');
-const messageRoutes = require('./routes/messages');
-const userRoutes = require('./routes/users');
-const studyRoomRoutes = require('./routes/studyRooms');
-const focusSessionRoutes = require('./routes/focusSessions');
-const analyticsRoutes = require('./routes/analytics');
-const notificationRoutes = require('./routes/notifications');
-const billingRoutes = require('./routes/billing');
-const roomsRoutes = require('./routes/rooms');
-const { router: aiRoutes } = require('./routes/ai');
-const gamificationRoutes = require('./routes/gamification');
-const complianceRoutes = require('./routes/compliance');
-const adminMetricsRoutes = require('./routes/adminMetrics');
-const discordRoutes = require('./routes/discord');
-const socraticRoutes = require('./routes/socratic');
-const { rateLimitHandler, checkIpBan } = require('./middleware/rateLimitBanning');
+const globalRouter = require('./routes');
+const { checkIpBan } = require('./middleware/rateLimitBanning');
 const env = require('./config/env');
 const status = require('./config/status');
 
@@ -134,44 +120,7 @@ app.use(csrfProtection);
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-// Prefix API routes with versioning (/api/v1) for easier future updates and backward compatibility
-const API_VERSION = '/api/v1';
-
-// Global Rate Limiter with automated Redis-backed IP abuse banning
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per `window`
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: 'Too many requests from this IP, please try again after 15 minutes',
-  handler: rateLimitHandler
-});
-
-// Apply rate limiter to all API routes
-app.use(`${API_VERSION}/`, apiLimiter);
-
-app.use(`${API_VERSION}/auth`, authRoutes);
-app.use('/auth', authRoutes);
-app.use(`${API_VERSION}/messages`, messageRoutes);
-app.use(`${API_VERSION}/users`, userRoutes);
-app.use(`${API_VERSION}/study-rooms`, studyRoomRoutes);
-app.use(`${API_VERSION}/focus-sessions`, focusSessionRoutes);
-app.use(`${API_VERSION}/analytics`, analyticsRoutes);
-app.use(`${API_VERSION}/notifications`, notificationRoutes);
-app.use('/notifications', notificationRoutes);
-app.use(`${API_VERSION}/billing`, billingRoutes);
-app.use('/billing', billingRoutes);
-app.use(`${API_VERSION}/rooms`, roomsRoutes);
-app.use('/rooms', roomsRoutes);
-app.use(`${API_VERSION}/ai`, aiRoutes);
-app.use('/ai', aiRoutes);
-app.use(`${API_VERSION}/gamification`, gamificationRoutes);
-app.use('/gamification', gamificationRoutes);
-app.use(`${API_VERSION}/compliance`, complianceRoutes);
-app.use(`${API_VERSION}/admin/billing`, adminMetricsRoutes);
-app.use(`${API_VERSION}/discord`, discordRoutes);
-app.use(`${API_VERSION}/socratic`, socraticRoutes);
-app.use('/socratic', socraticRoutes);
+app.use(globalRouter);
 
 // Register RFC 9116 security researcher contact details endpoint
 app.get('/.well-known/security.txt', (req, res) => {
@@ -221,6 +170,22 @@ app.get('/api/health', async (req, res) => {
     socketHealthy = status.getStatus().systems.socket.loaded;
   } catch (e) {}
 
+  // Fetch active worker heartbeats from Redis (Task 6)
+  let activeWorkersList = [];
+  if (redisConnected) {
+    try {
+      const keys = await redis.keys('worker:health:*');
+      for (const key of keys) {
+        const data = await redis.get(key);
+        if (data) {
+          activeWorkersList.push(JSON.parse(data));
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to fetch worker heartbeats:', e.message);
+    }
+  }
+
   const overallHealthy = mongoConnected && (!process.env.REDIS_URL || redisConnected) && socketHealthy;
   const systemStatus = status.getStatus();
 
@@ -247,6 +212,10 @@ app.get('/api/health', async (req, res) => {
       queues: {
         healthy: queues.every(q => !q.bullMqActive || q.bullMqActive),
         list: queues
+      },
+      workers: {
+        activeCount: activeWorkersList.length,
+        list: activeWorkersList
       }
     }
   });
@@ -258,7 +227,7 @@ app.get('/api/health/liveness', (req, res) => {
 });
 
 // 3. Kubernetes Readiness Probe
-app.get('/api/health/readiness', (req, res) => {
+app.get('/api/health/readiness', async (req, res) => {
   const mongoose = require('mongoose');
   const { getRedisClient } = require('./config/redisClient');
   
@@ -267,6 +236,14 @@ app.get('/api/health/readiness', (req, res) => {
   const redisConnected = redis && redis.status === 'ready';
   const socketLoaded = status.getStatus().systems.socket.loaded;
   
+  let activeWorkersCount = 0;
+  if (redisConnected) {
+    try {
+      const keys = await redis.keys('worker:health:*');
+      activeWorkersCount = keys.length;
+    } catch (e) {}
+  }
+
   const isProdOrStaging = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
   const isReady = mongoConnected && (!isProdOrStaging || redisConnected) && socketLoaded;
   
@@ -276,7 +253,8 @@ app.get('/api/health/readiness', (req, res) => {
     checks: {
       mongodb: mongoConnected,
       redis: redisConnected,
-      websocket: socketLoaded
+      websocket: socketLoaded,
+      workersActiveCount: activeWorkersCount
     }
   });
 });
@@ -292,19 +270,8 @@ app.use((req, res, next) => {
 });
 
 // 2. Global error handler
-// Provides standardized error responses, stripping stack traces in production
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-
-  const statusCode = err.statusCode || 500;
-  const message = err.message || 'Internal server error';
-
-  res.status(statusCode).json({
-    status: 'error',
-    message,
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-  });
-});
+const globalErrorHandler = require('./middleware/errorHandler');
+app.use(globalErrorHandler);
 
 // Centralized error tracking hooks for unhandled process anomalies
 process.on('uncaughtException', (err) => {

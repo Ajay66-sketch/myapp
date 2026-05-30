@@ -23,6 +23,9 @@ process.env.STRIPE_YEARLY_PRICE_ID = 'price_yearly_verify_build_mock';
 process.env.POSTHOG_API_KEY = 'phc_test_verify_build_mock_key';
 process.env.POSTHOG_HOST = 'https://app.posthog.com';
 
+// Mock OpenAI API key for production pre-boot validation checks
+process.env.OPENAI_API_KEY = 'sk_mock_openai_key_for_ci_verification';
+
 console.log('🏁 Initiating production compiler smoke verification checks...');
 
 try {

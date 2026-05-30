@@ -3,6 +3,20 @@
 
 const { z } = require('zod');
 
+// Bidirectional synchronization of alternative environment variable names
+if (process.env.MONGODB_URI && !process.env.MONGO_URI) {
+  process.env.MONGO_URI = process.env.MONGODB_URI;
+}
+if (process.env.MONGO_URI && !process.env.MONGODB_URI) {
+  process.env.MONGODB_URI = process.env.MONGO_URI;
+}
+if (process.env.STRIPE_SECRET_KEY && !process.env.STRIPE_API_KEY) {
+  process.env.STRIPE_API_KEY = process.env.STRIPE_SECRET_KEY;
+}
+if (process.env.STRIPE_API_KEY && !process.env.STRIPE_SECRET_KEY) {
+  process.env.STRIPE_SECRET_KEY = process.env.STRIPE_API_KEY;
+}
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'staging', 'test']).default('development'),
   PORT: z.string().optional().default('5000'),
@@ -134,9 +148,9 @@ function validateApiEnv() {
       }
     }
 
-    // 2. Database checks
-    if (!process.env.MONGO_URI) {
-      errors.push('MONGO_URI is required in production/staging.');
+    // 2. Database checks (MONGODB_URI / MONGO_URI)
+    if (!process.env.MONGODB_URI) {
+      errors.push('MONGODB_URI (or MONGO_URI) is required in production/staging.');
     }
 
     // 3. Redis checks
@@ -149,8 +163,10 @@ function validateApiEnv() {
       errors.push('CLIENT_URL or CORS_ALLOWED_ORIGINS is required in production/staging.');
     }
 
-    // 5. Stripe checks
-    if (!process.env.STRIPE_API_KEY) errors.push('STRIPE_API_KEY is required in production/staging.');
+    // 5. Stripe checks (STRIPE_SECRET_KEY / STRIPE_API_KEY)
+    if (!process.env.STRIPE_SECRET_KEY) {
+      errors.push('STRIPE_SECRET_KEY (or STRIPE_API_KEY) is required in production/staging.');
+    }
     if (!process.env.STRIPE_WEBHOOK_SECRET) errors.push('STRIPE_WEBHOOK_SECRET is required in production/staging.');
     if (!process.env.STRIPE_MONTHLY_PRICE_ID) errors.push('STRIPE_MONTHLY_PRICE_ID is required in production/staging.');
     if (!process.env.STRIPE_YEARLY_PRICE_ID) errors.push('STRIPE_YEARLY_PRICE_ID is required in production/staging.');
@@ -158,6 +174,11 @@ function validateApiEnv() {
     // 6. PostHog Analytics checks
     if (!process.env.POSTHOG_API_KEY) errors.push('POSTHOG_API_KEY is required in production/staging.');
     if (!process.env.POSTHOG_HOST) errors.push('POSTHOG_HOST is required in production/staging.');
+
+    // 7. OpenAI API Key check
+    if (!process.env.OPENAI_API_KEY) {
+      errors.push('OPENAI_API_KEY is required in production/staging.');
+    }
 
     if (errors.length > 0) {
       console.error('❌ PRODUCTION/STAGING CONFIGURATION CRITICAL ERROR:');

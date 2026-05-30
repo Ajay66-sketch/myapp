@@ -166,6 +166,10 @@ router.post('/google', async (req, res) => {
 
     setAuthCookies(res, accessToken, refreshToken);
 
+    // Call suspicious login detection hook
+    const { detectSuspiciousLogin } = require('../utils/suspiciousLoginDetector');
+    await detectSuspiciousLogin(user, req).catch(err => console.error('[SuspiciousLogin] Anomaly hook error:', err.message));
+
     const systemEventBus = require('../telemetry/eventBus');
     systemEventBus.emit('auth:action', 'info', { action: 'auth_google_login', userId: user._id.toString() }, 'security');
 
@@ -346,6 +350,10 @@ router.post('/login', require('../middleware/rateLimitSuspicious').checkSuspicio
     await registerSessionInRedis(user._id.toString(), refreshToken, req);
 
     setAuthCookies(res, accessToken, refreshToken);
+
+    // Call suspicious login detection hook
+    const { detectSuspiciousLogin } = require('../utils/suspiciousLoginDetector');
+    await detectSuspiciousLogin(user, req).catch(err => console.error('[SuspiciousLogin] Anomaly hook error:', err.message));
 
     const systemEventBus = require('../telemetry/eventBus');
     systemEventBus.emit('auth:action', 'info', { action: 'auth_login', userId: user._id.toString() }, 'security');
@@ -571,6 +579,129 @@ router.post('/2fa/verify', protect, async (req, res) => {
     return res.json({ message: '2FA verified successfully' });
   }
   res.status(400).json({ message: 'Invalid 2FA verification code' });
+});
+
+// ─── Active Session Management (Task 4) ──────────────────────────────────────
+
+router.get('/sessions', protect, async (req, res) => {
+  try {
+    const redis = getRedis();
+    if (!redis || redis.status !== 'ready') {
+      // Database session fallback when Redis is offline
+      const user = await findUserById(req.user._id);
+      if (user && user.refreshToken) {
+        return res.json([
+          {
+            id: 'db-fallback',
+            deviceId: 'unknown',
+            ip: 'unknown',
+            userAgent: 'unknown',
+            lastUsed: user.updatedAt || Date.now(),
+            createdAt: user.createdAt || Date.now(),
+            isCurrent: true,
+          }
+        ]);
+      }
+      return res.json([]);
+    }
+
+    const pattern = `session:refresh:${req.user._id}:*`;
+    const keys = await redis.keys(pattern);
+    const sessions = [];
+
+    // Identify current active session from cookies or request body
+    const currentRefreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
+
+    for (const key of keys) {
+      const data = await redis.get(key);
+      if (data) {
+        const parsed = JSON.parse(data);
+        const rawToken = parsed.refreshToken;
+        
+        // Strip/mask raw refresh token to prevent exposure in API responses
+        delete parsed.refreshToken;
+        
+        sessions.push({
+          ...parsed,
+          isCurrent: rawToken === currentRefreshToken,
+          // Generate reproducible session hash id for remote revocation
+          id: Buffer.from(rawToken).toString('base64').substring(0, 32),
+        });
+      }
+    }
+
+    res.json(sessions);
+  } catch (error) {
+    console.error('[Sessions API] Failed to get sessions:', error.message);
+    res.status(500).json({ message: 'Server error retrieving sessions' });
+  }
+});
+
+router.delete('/sessions/:id', protect, async (req, res) => {
+  try {
+    const redis = getRedis();
+    if (!redis || redis.status !== 'ready') {
+      return res.status(503).json({ message: 'Session manager is temporarily offline' });
+    }
+
+    const pattern = `session:refresh:${req.user._id}:*`;
+    const keys = await redis.keys(pattern);
+    let deleted = false;
+
+    for (const key of keys) {
+      const data = await redis.get(key);
+      if (data) {
+        const parsed = JSON.parse(data);
+        const rawToken = parsed.refreshToken;
+        const hashId = Buffer.from(rawToken).toString('base64').substring(0, 32);
+
+        if (hashId === req.params.id) {
+          await redis.del(key);
+          deleted = true;
+          break;
+        }
+      }
+    }
+
+    if (deleted) {
+      res.json({ message: 'Session successfully revoked' });
+    } else {
+      res.status(404).json({ message: 'Session not found' });
+    }
+  } catch (error) {
+    console.error('[Sessions API] Failed to revoke session:', error.message);
+    res.status(500).json({ message: 'Server error revoking session' });
+  }
+});
+
+router.delete('/sessions', protect, async (req, res) => {
+  try {
+    const redis = getRedis();
+    if (!redis || redis.status !== 'ready') {
+      return res.status(503).json({ message: 'Session manager is temporarily offline' });
+    }
+
+    const pattern = `session:refresh:${req.user._id}:*`;
+    const keys = await redis.keys(pattern);
+    const currentRefreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
+
+    let revokeCount = 0;
+    for (const key of keys) {
+      const data = await redis.get(key);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (parsed.refreshToken !== currentRefreshToken) {
+          await redis.del(key);
+          revokeCount++;
+        }
+      }
+    }
+
+    res.json({ message: `Successfully revoked ${revokeCount} other active sessions` });
+  } catch (error) {
+    console.error('[Sessions API] Failed to revoke other sessions:', error.message);
+    res.status(500).json({ message: 'Server error revoking other sessions' });
+  }
 });
 
 module.exports = router;
