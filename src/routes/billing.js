@@ -1,5 +1,5 @@
 // src/routes/billing.js
-// Production ready billing API router for Stripe checkout, portals, and webhook signature verification
+// Production ready billing API router for Razorpay checkout orders, webhooks, and cancellation
 
 const express = require('express');
 const { protect } = require('../middleware/auth');
@@ -10,63 +10,91 @@ const { logAuditEvent } = require('../utils/auditLogger');
 const env = require('../config/env');
 const User = require('../models/User'); // MongoDB User schema model
 const AnalyticsService = require('../services/analyticsService');
+const systemEventBus = require('../telemetry/eventBus');
+const userRepository = require('../repositories/UserRepository');
+const { getSystemState } = require('../config/serviceRegistry');
+const { getRazorpayClient, setBillingStatus } = require('../config/razorpay');
+
+function markBillingUp() {
+  if (getSystemState().billing !== 'UP') {
+    setBillingStatus('UP');
+  }
+}
 
 const router = express.Router();
 
-// Initialize Stripe Client securely in production
-let stripe = null;
-if (process.env.STRIPE_API_KEY) {
-  stripe = require('stripe')(process.env.STRIPE_API_KEY);
-  console.log('💳 Stripe Billing Client initialized successfully.');
-} else {
-  console.warn('⚠️ Stripe API key missing. Operating in sandboxed billing mode.');
+/**
+ * Helper to standardise Razorpay error handling and prevent uncaught/unhandled rejections
+ */
+function handleBillingFailure(res, error, context) {
+  console.error(`[CHAOS][FAILOVER] Razorpay operation [${context}] failed:`);
+  if (error) {
+    console.error(`  - error.message:`, error.message);
+    console.error(`  - error.error:`, error.error);
+    console.error(`  - error.statusCode:`, error.statusCode);
+    console.error(`  - error.response:`, error.response);
+    console.error(`  - error.stack:`, error.stack);
+  } else {
+    console.error(`  - error object is undefined/null`);
+  }
+  console.warn(`[CHAOS][DEGRADED MODE] Razorpay unavailable → billing degraded`);
+  
+  if (getSystemState().billing !== 'DEGRADED') {
+    setBillingStatus('DEGRADED');
+  }
+
+  return res.status(503).json({
+    error: "Billing temporarily unavailable",
+    mode: "degraded"
+  });
 }
 
 /**
  * POST /api/v1/billing/webhook
- * Stripe Webhook Handler (Must be registered BEFORE protect middleware to receive raw payloads)
+ * Razorpay Webhook Handler
  */
 router.post('/webhook', async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-  if (!stripe) {
-    console.warn('[Stripe Webhook] Received webhook but Stripe client is disabled.');
-    return res.status(400).json({ error: 'STRIPE_DISABLED' });
+  const rzp = getRazorpayClient();
+  if (!rzp) {
+    return handleBillingFailure(res, new Error('Razorpay client not initialized'), 'webhook_init');
   }
+
+  const sig = req.headers['x-razorpay-signature'];
+  const endpointSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
   let event;
   try {
     const rawPayload = req.rawBody || req.body;
+    const rawPayloadStr = Buffer.isBuffer(rawPayload) ? rawPayload.toString('utf8') : (typeof rawPayload === 'string' ? rawPayload : JSON.stringify(rawPayload));
+    
     if (process.env.NODE_ENV === 'production' || endpointSecret) {
       if (!sig || !endpointSecret) {
         logAuditEvent({
           action: 'suspicious_entitlement_change',
           userId: null,
           success: false,
-          metadata: { reason: 'Missing Stripe signature or endpoint secret in production/signed mode' },
+          metadata: { reason: 'Missing Razorpay signature or webhook secret in production/signed mode' },
         });
-        return res.status(400).send('Webhook Error: Stripe signature and secret are mandatory.');
+        return handleBillingFailure(res, new Error('Webhook missing sig or secret'), 'webhook_verify');
       }
-      event = stripe.webhooks.constructEvent(rawPayload, sig, endpointSecret);
-    } else {
-      // Direct parsing fallback for non-signed development calls only
-      event = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      
+      const Razorpay = require('razorpay');
+      const isValid = Razorpay.validateWebhookSignature(rawPayloadStr, sig, endpointSecret);
+      if (!isValid) {
+        throw new Error('Invalid Razorpay signature');
+      }
+      markBillingUp();
     }
+    
+    event = typeof rawPayloadStr === 'string' ? JSON.parse(rawPayloadStr) : rawPayloadStr;
   } catch (err) {
-    console.error(`❌ Stripe Webhook Signature Verification Failed:`, err.message);
-    logAuditEvent({
-      action: 'suspicious_entitlement_change',
-      userId: null,
-      success: false,
-      metadata: { reason: 'Webhook signature validation failed', error: err.message },
-    });
-    return res.status(400).send(`Webhook Error: ${err.message}`);
+    return handleBillingFailure(res, err, 'webhook_construct');
   }
 
-  console.log(`📡 Stripe Webhook Event Received: [${event.type}] (ID: ${event.id})`);
+  const eventType = event.event;
+  const eventId = event.created_at ? `${eventType}_${event.created_at}` : `rzp_evt_${Math.random()}`;
+  console.log(`📡 Razorpay Webhook Event Received: [${eventType}] (ID: ${eventId})`);
 
-  const eventId = event.id;
   let isDuplicate = false;
   let redisClient = null;
   try {
@@ -82,7 +110,7 @@ router.post('/webhook', async (req, res) => {
         isDuplicate = true;
       }
     } catch (e) {
-      console.warn('[Stripe Webhook] Redis idempotency connection exception:', e.message);
+      console.warn('[Razorpay Webhook] Redis idempotency connection exception:', e.message);
     }
   } else {
     if (!global.processedWebhooks) {
@@ -100,64 +128,94 @@ router.post('/webhook', async (req, res) => {
   }
 
   if (isDuplicate) {
-    console.log(`⚠️ Stripe Webhook: Duplicate event delivery rejected: ${eventId}`);
+    console.log(`⚠️ Razorpay Webhook: Duplicate event delivery rejected: ${eventId}`);
     return res.status(200).json({ received: true, duplicate: true });
   }
 
   try {
-    switch (event.type) {
-      case 'checkout.session.completed': {
-        const session = event.data.object;
-        const userId = session.metadata?.userId;
-        const targetTier = session.metadata?.planId || 'pro';
+    let userId = null;
+    let customerId = null;
+    let subscriptionId = null;
+    
+    if (event.payload?.subscription?.entity) {
+      const subEntity = event.payload.subscription.entity;
+      userId = subEntity.notes?.userId;
+      customerId = subEntity.customer_id;
+      subscriptionId = subEntity.id;
+    } else if (event.payload?.payment?.entity) {
+      const payEntity = event.payload.payment.entity;
+      userId = payEntity.notes?.userId;
+      customerId = payEntity.customer_id;
+    }
 
-        if (userId) {
-          const user = await User.findById(userId);
-          if (user) {
-            const previousTier = user.tier || 'free';
-            user.tier = targetTier;
-            user.stripeCustomerId = session.customer;
-            if (!user.badges.includes('premium_member')) {
-              user.badges.push('premium_member');
-            }
-            await user.save();
+    let user = null;
+    if (userId) {
+      user = await User.findById(userId);
+    }
+    if (!user && subscriptionId) {
+      user = await User.findOne({ 'billing.subscriptionId': subscriptionId });
+    }
+    if (!user && customerId) {
+      user = await User.findOne({ 'billing.customerId': customerId });
+    }
 
-            logAuditEvent({
-              action: 'tier_changed',
-              userId: user._id,
-              previousTier,
-              nextTier: targetTier,
-              resource: req.originalUrl,
-              metadata: { stripeCustomerId: session.customer, checkoutSessionId: session.id },
-            });
-            
-            // Track billing upgrade event in PostHog
-            await AnalyticsService.track('subscription_started', user._id.toString(), {
-              planTier: targetTier,
-              previousTier,
-              stripeCustomerId: session.customer
-            });
-
-            console.log(`✅ User ${user.username} upgraded to ${targetTier} via checkout subscription.`);
+    switch (eventType) {
+      case 'subscription.activated':
+      case 'subscription.charged':
+      case 'subscription.completed': {
+        if (user) {
+          const previousTier = user.tier || 'free';
+          const targetTier = 'pro';
+          
+          user.tier = targetTier;
+          user.billing = {
+            provider: 'razorpay',
+            customerId: customerId || user.billing?.customerId,
+            subscriptionId: subscriptionId || user.billing?.subscriptionId,
+            status: 'active'
+          };
+          if (!user.badges.includes('premium_member')) {
+            user.badges.push('premium_member');
           }
+          await user.save();
+          await userRepository.update(user._id.toString(), {
+            tier: targetTier,
+            billing: user.billing,
+            badges: user.badges
+          });
+
+          logAuditEvent({
+            action: 'tier_changed',
+            userId: user._id,
+            previousTier,
+            nextTier: targetTier,
+            resource: req.originalUrl,
+            metadata: { billing: user.billing, eventId },
+          });
+          
+          await AnalyticsService.track('subscription_started', user._id.toString(), {
+            planTier: targetTier,
+            previousTier,
+            customerId: customerId
+          });
+
+          console.log(`✅ User ${user.username} upgraded to ${targetTier} via Razorpay subscription.`);
         }
         break;
       }
-
-      case 'customer.subscription.updated':
-      case 'customer.subscription.deleted': {
-        const sub = event.data.object;
-        const customerId = sub.customer;
-        const isDeleted = event.type === 'customer.subscription.deleted' || sub.status === 'canceled' || sub.status === 'unpaid';
-
-        const user = await User.findOne({ stripeCustomerId: customerId });
+      
+      case 'subscription.cancelled': {
         if (user) {
           const previousTier = user.tier || 'free';
-          const nextTier = isDeleted ? 'free' : 'pro';
+          const nextTier = 'free';
 
           if (previousTier !== nextTier) {
             user.tier = nextTier;
+            if (user.billing) {
+              user.billing.status = 'cancelled';
+            }
             await user.save();
+            await userRepository.update(user._id.toString(), { tier: nextTier, billing: user.billing });
 
             logAuditEvent({
               action: 'tier_changed',
@@ -165,39 +223,30 @@ router.post('/webhook', async (req, res) => {
               previousTier,
               nextTier,
               resource: req.originalUrl,
-              metadata: { subscriptionId: sub.id, status: sub.status },
+              metadata: { billing: user.billing },
             });
 
-            // Track billing cancellation/mutation in PostHog
-            if (isDeleted) {
-              await AnalyticsService.track('subscription_cancelled', user._id.toString(), {
-                planTier: 'free',
-                previousTier,
-                stripeCustomerId: customerId
-              });
-            } else {
-              await AnalyticsService.track('subscription_started', user._id.toString(), {
-                planTier: nextTier,
-                previousTier,
-                stripeCustomerId: customerId
-              });
-            }
+            await AnalyticsService.track('subscription_cancelled', user._id.toString(), {
+              planTier: 'free',
+              previousTier,
+              customerId: customerId
+            });
 
             console.log(`✅ User ${user.username} tier mutated: ${previousTier} -> ${nextTier} based on subscription status.`);
           }
         }
         break;
       }
-
-      case 'invoice.payment_failed': {
-        const invoice = event.data.object;
-        const customerId = invoice.customer;
-
-        const user = await User.findOne({ stripeCustomerId: customerId });
+      
+      case 'payment.failed': {
         if (user) {
           const previousTier = user.tier || 'free';
           user.tier = 'grace_period';
+          if (user.billing) {
+            user.billing.status = 'payment_failed';
+          }
           await user.save();
+          await userRepository.update(user._id.toString(), { tier: 'grace_period', billing: user.billing });
 
           logAuditEvent({
             action: 'payment_failed_tier_revoked',
@@ -205,62 +254,49 @@ router.post('/webhook', async (req, res) => {
             previousTier,
             nextTier: 'grace_period',
             resource: req.originalUrl,
-            metadata: { invoiceId: invoice.id, amountDue: invoice.amount_due, attemptCount: invoice.attempt_count || 1 },
+            metadata: { eventId },
           });
-          console.warn(`⚠️ User ${user.username} entered billing GRACE_PERIOD due to failed Stripe invoice payment.`);
+          console.warn(`⚠️ User ${user.username} entered billing GRACE_PERIOD due to failed Razorpay payment.`);
         }
         break;
       }
-
-      case 'invoice.payment_succeeded': {
-        const invoice = event.data.object;
-        const customerId = invoice.customer;
-
-        if (invoice.amount_paid > 0) {
-          const user = await User.findOne({ stripeCustomerId: customerId });
-          if (user && user.tier === 'grace_period') {
-            user.tier = 'pro';
-            await user.save();
-
-            logAuditEvent({
-              action: 'tier_changed',
-              userId: user._id,
-              previousTier: 'grace_period',
-              nextTier: 'pro',
-              resource: req.originalUrl,
-              metadata: { invoiceId: invoice.id, amountPaid: invoice.amount_paid },
-            });
-            console.log(`✅ User ${user.username} billing grace resolved. Restored to Pro tier.`);
+      
+      case 'payment.captured': {
+        if (user && (user.tier === 'free' || user.tier === 'grace_period')) {
+          const previousTier = user.tier;
+          user.tier = 'pro';
+          user.billing = {
+            provider: 'razorpay',
+            customerId: customerId || user.billing?.customerId,
+            subscriptionId: subscriptionId || user.billing?.subscriptionId,
+            status: 'active'
+          };
+          if (!user.badges.includes('premium_member')) {
+            user.badges.push('premium_member');
           }
-        }
-        break;
-      }
+          await user.save();
+          await userRepository.update(user._id.toString(), { tier: 'pro', billing: user.billing, badges: user.badges });
 
-      case 'customer.subscription.trial_will_end': {
-        const sub = event.data.object;
-        const customerId = sub.customer;
-
-        const user = await User.findOne({ stripeCustomerId: customerId });
-        if (user) {
           logAuditEvent({
-            action: 'trial_will_end_alert',
+            action: 'tier_changed',
             userId: user._id,
-            success: true,
-            metadata: { subscriptionId: sub.id, trialEnd: sub.trial_end },
+            previousTier,
+            nextTier: 'pro',
+            resource: req.originalUrl,
+            metadata: { eventId },
           });
-          console.log(`📡 User ${user.username} trial is scheduled to complete shortly.`);
+          console.log(`✅ User ${user.username} billing grace/free resolved. Upgraded to Pro tier via payment.captured.`);
         }
         break;
       }
 
       default:
-        console.log(`💡 Unhandled Webhook Event Type: ${event.type}`);
+        console.log(`💡 Unhandled Webhook Event Type: ${eventType}`);
     }
 
     return res.json({ received: true });
   } catch (error) {
-    console.error('[Stripe Webhook Error Processing]:', error);
-    return res.status(500).json({ error: 'Webhook processing exception occurred.' });
+    return handleBillingFailure(res, error, 'webhook_process');
   }
 });
 
@@ -284,9 +320,14 @@ router.get('/plans', (req, res) => {
 
 /**
  * POST /api/v1/billing/upgrade
- * Initiate Stripe checkout session (Strictly fails safely without fallbacks)
+ * Initiate Razorpay checkout order creation
  */
 router.post('/upgrade', async (req, res) => {
+  const rzp = getRazorpayClient();
+  if (!rzp) {
+    return handleBillingFailure(res, new Error('Razorpay client not initialized'), 'upgrade_init');
+  }
+
   try {
     const cycle = req.body.cycle || 'monthly';
     const previousTier = req.user.tier || 'free';
@@ -306,33 +347,18 @@ router.post('/upgrade', async (req, res) => {
       resource: req.originalUrl,
     });
 
-    if (!stripe) {
+    const priceVal = cycle === 'yearly'
+      ? process.env.RAZORPAY_YEARLY_PRICE
+      : process.env.RAZORPAY_MONTHLY_PRICE;
+
+    if (!priceVal) {
       logAuditEvent({
         action: 'upgrade_failed',
         userId: req.user._id,
         previousTier,
         resource: req.originalUrl,
         success: false,
-        metadata: { reason: 'Stripe client is not initialized' }
-      });
-      return res.status(503).json({
-        error: 'BILLING_SERVICE_UNAVAILABLE',
-        message: 'The billing service is currently unavailable. Please try again later.',
-      });
-    }
-
-    const priceId = cycle === 'yearly'
-      ? process.env.STRIPE_YEARLY_PRICE_ID
-      : process.env.STRIPE_MONTHLY_PRICE_ID;
-
-    if (!priceId) {
-      logAuditEvent({
-        action: 'upgrade_failed',
-        userId: req.user._id,
-        previousTier,
-        resource: req.originalUrl,
-        success: false,
-        metadata: { reason: `Price ID missing for cycle: ${cycle}` }
+        metadata: { reason: `Price missing for cycle: ${cycle}` }
       });
       return res.status(500).json({
         error: 'BILLING_CONFIG_ERROR',
@@ -340,34 +366,35 @@ router.post('/upgrade', async (req, res) => {
       });
     }
 
-    // Create Stripe checkout session with Automatic Tax calculations enabled
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: [
-        {
-          price: priceId,
-          quantity: 1,
-        },
-      ],
-      mode: 'subscription',
-      automatic_tax: { enabled: true },
-      success_url: `${env.getClientOrigin()}/?payment=success`,
-      cancel_url: `${env.getClientOrigin()}/?payment=cancel`,
-      customer_email: req.user.email,
-      metadata: {
+    let amount = 50000;
+    const parsedPrice = parseFloat(priceVal);
+    if (!isNaN(parsedPrice)) {
+      amount = Math.round(parsedPrice * 100);
+    }
+
+    const order = await rzp.orders.create({
+      amount: amount,
+      currency: 'INR',
+      receipt: `receipt_${req.user._id}`,
+      notes: {
         userId: req.user._id.toString(),
         planId: 'pro',
-      },
+        cycle
+      }
     });
+
+    markBillingUp();
 
     return res.json({
       success: true,
-      status: 'redirect',
-      sessionUrl: session.url,
+      status: 'order_created',
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      keyId: process.env.RAZORPAY_KEY_ID
     });
 
   } catch (error) {
-    console.error('Stripe Upgrade Session Error:', error);
     logAuditEvent({
       action: 'upgrade_failed',
       userId: req.user?._id,
@@ -376,45 +403,19 @@ router.post('/upgrade', async (req, res) => {
       success: false,
       metadata: { error: error.message }
     });
-    return res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to initiate checkout portal' });
+    return handleBillingFailure(res, error, 'upgrade_session');
   }
 });
 
 /**
  * GET /api/v1/billing/portal
- * Create customer billing portal redirection link
+ * Create customer billing portal redirection link (Not supported by Razorpay)
  */
 router.get('/portal', async (req, res) => {
-  try {
-    if (!stripe) {
-      return res.status(503).json({
-        error: 'BILLING_SERVICE_UNAVAILABLE',
-        message: 'The billing portal is currently unavailable.',
-      });
-    }
-
-    const customerId = req.user.stripeCustomerId;
-    if (!customerId) {
-      return res.status(400).json({
-        error: 'NO_STRIPE_CUSTOMER',
-        message: 'No Stripe active subscription found. Please upgrade first.',
-      });
-    }
-
-    const portalSession = await stripe.billingPortal.sessions.create({
-      customer: customerId,
-      return_url: env.getClientOrigin(),
-    });
-
-    return res.json({
-      success: true,
-      portalUrl: portalSession.url,
-    });
-
-  } catch (error) {
-    console.error('Billing Portal Creation failed:', error);
-    return res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to build billing portal session' });
-  }
+  return res.status(501).json({
+    error: 'NOT_IMPLEMENTED',
+    message: 'Billing portal is not supported on Razorpay. Please manage subscriptions directly on our website or contact support.'
+  });
 });
 
 /**
@@ -422,10 +423,18 @@ router.get('/portal', async (req, res) => {
  * Cancel active subscription securely
  */
 router.post('/cancel', async (req, res) => {
+  const rzp = getRazorpayClient();
+  if (!rzp) {
+    return handleBillingFailure(res, new Error('Razorpay client not initialized'), 'cancel_init');
+  }
+
   try {
-    const user = req.user;
+    const user = await userRepository.get(req.user._id);
+    if (!user) {
+      return res.status(404).json({ error: 'USER_NOT_FOUND', message: 'User not found' });
+    }
     const previousTier = user.tier || 'free';
-    const customerId = user.stripeCustomerId;
+    const subId = user.billing?.subscriptionId;
 
     logAuditEvent({
       action: 'cancel_requested',
@@ -435,24 +444,25 @@ router.post('/cancel', async (req, res) => {
       resource: req.originalUrl,
     });
 
-    if (stripe && customerId) {
+    if (subId) {
       try {
-        const subscriptions = await stripe.subscriptions.list({ customer: customerId });
-        for (const sub of subscriptions.data) {
-          await stripe.subscriptions.cancel(sub.id);
-        }
+        await rzp.subscriptions.cancel(subId, false);
+        markBillingUp();
       } catch (err) {
-        console.warn('[Billing Cancel] Stripe subscription cancel failed:', err.message);
+        console.warn('[Billing Cancel] Razorpay subscription cancel failed:', err.message);
       }
     }
 
     user.tier = 'free';
+    if (user.billing) {
+      user.billing.status = 'cancelled';
+    }
     await user.save();
 
     await AnalyticsService.track('subscription_cancelled', user._id.toString(), {
       planTier: 'free',
       previousTier,
-      stripeCustomerId: customerId || 'sandbox'
+      customerId: user.billing?.customerId || 'sandbox'
     });
 
     return res.json({
@@ -462,8 +472,7 @@ router.post('/cancel', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Subscription Cancel Error:', error);
-    return res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Failed to cancel subscription' });
+    return handleBillingFailure(res, error, 'cancel_session');
   }
 });
 

@@ -1,5 +1,5 @@
 // scripts/test-bypass-attempts.js
-// Security smoke test harness for Stripe integration, bypass enforcements, and webhook integrity
+// Security smoke test harness for Razorpay integration, bypass enforcements, and webhook integrity
 
 const assert = require('assert').strict;
 const mongoose = require('mongoose');
@@ -46,14 +46,11 @@ function reloadBillingRouter() {
   return require('../src/routes/billing');
 }
 
-// Test 1: Verify startup validation fails on missing production configuration
+// Test 1: Verify startup validation behavior on missing keys (optional vs. core required)
 function testEnvironmentValidation() {
   console.log('🛡️  1. Verifying environment pre-boot validation enforcements...');
   
-  // Set up mock missing variables
-  const originalStripeKey = process.env.STRIPE_API_KEY;
-  delete process.env.STRIPE_API_KEY;
-
+  // Set up mock exit handlers
   let crashed = false;
   const originalExit = process.exit;
   
@@ -63,8 +60,19 @@ function testEnvironmentValidation() {
     throw new Error('PROCESS_EXIT_TRIGGERED');
   };
 
+  // Mock core variables so they don't trigger crashes in Scenario A
+  const originalMongo = process.env.MONGODB_URI;
+  const originalRedis = process.env.REDIS_URL;
+  process.env.MONGODB_URI = 'mongodb://localhost:27017/scholar_test';
+  process.env.REDIS_URL = 'redis://localhost:6379';
+
+  // Scenario A: Missing optional key RAZORPAY_KEY_ID -> should NOT crash
+  const originalRazorpayKey = process.env.RAZORPAY_KEY_ID;
+  delete process.env.RAZORPAY_KEY_ID;
+
   try {
     delete require.cache[require.resolve('../src/config/env')];
+    global.__preBootAuditExecuted = false;
     const envConfig = require('../src/config/env');
     envConfig.validateApiEnv();
   } catch (err) {
@@ -73,14 +81,44 @@ function testEnvironmentValidation() {
     }
   }
 
-  process.env.STRIPE_API_KEY = originalStripeKey; // Restore
-  assert.equal(crashed, true, 'App did not refuse startup when STRIPE_API_KEY was missing in production!');
-  console.log(`${green}✔ [PASSED]${reset} Pre-boot validation refuses startup when secrets are missing.`);
+  process.env.RAZORPAY_KEY_ID = originalRazorpayKey; // Restore
+  assert.equal(crashed, false, 'App incorrectly refused startup when RAZORPAY_KEY_ID was missing in production!');
+  console.log(`${green}✔ [SUB-PASS]${reset} Pre-boot validation succeeds when optional Razorpay secrets are missing.`);
+
+  // Scenario B: Missing CORE REQUIRED key JWT_SECRET -> should crash
+  const originalJwtSecret = process.env.JWT_SECRET;
+  delete process.env.JWT_SECRET;
+  crashed = false;
+
+  process.exit = (code) => {
+    crashed = true;
+    process.exit = originalExit; // Restore exit handler
+    throw new Error('PROCESS_EXIT_TRIGGERED');
+  };
+
+  try {
+    delete require.cache[require.resolve('../src/config/env')];
+    global.__preBootAuditExecuted = false;
+    const envConfig = require('../src/config/env');
+    envConfig.validateApiEnv();
+  } catch (err) {
+    if (err.message !== 'PROCESS_EXIT_TRIGGERED') {
+      throw err;
+    }
+  }
+
+  process.env.JWT_SECRET = originalJwtSecret; // Restore
+  process.env.MONGODB_URI = originalMongo;
+  process.env.REDIS_URL = originalRedis;
+  process.exit = originalExit; // Restore exit handler
+  assert.equal(crashed, true, 'App did not refuse startup when core JWT_SECRET was missing in production!');
+  console.log(`${green}✔ [SUB-PASS]${reset} Pre-boot validation refuses startup when core JWT_SECRET is missing.`);
+  console.log(`${green}✔ [PASSED]${reset} SRE Gate classification rules are correctly enforced.`);
 }
 
 // Test 2: Verify safe failures inside billing upgrades on missing configurations
-async function testSafeFailureOnMissingStripe() {
-  console.log('\n🛡️  2. Verifying billing upgrade fails safely when Stripe is disabled...');
+async function testSafeFailureOnMissingRazorpay() {
+  console.log('\n🛡️  2. Verifying billing upgrade fails safely when Razorpay is disabled...');
 
   const mockUser = {
     _id: new mongoose.Types.ObjectId(),
@@ -97,9 +135,9 @@ async function testSafeFailureOnMissingStripe() {
 
   const res = createMockResponse();
 
-  // Save current Stripe key to mock disabled state
-  const originalStripeKey = process.env.STRIPE_API_KEY;
-  delete process.env.STRIPE_API_KEY;
+  // Save current Razorpay key to mock disabled state
+  const originalRazorpayKey = process.env.RAZORPAY_KEY_ID;
+  delete process.env.RAZORPAY_KEY_ID;
 
   // Hot-reload router
   const billingRouter = reloadBillingRouter();
@@ -114,10 +152,10 @@ async function testSafeFailureOnMissingStripe() {
   });
 
   // Restore key
-  process.env.STRIPE_API_KEY = originalStripeKey;
+  process.env.RAZORPAY_KEY_ID = originalRazorpayKey;
 
-  assert.equal(res.getStatus(), 503, 'Expected 503 Service Unavailable when Stripe is not configured');
-  assert.equal(res.getBody().error, 'BILLING_SERVICE_UNAVAILABLE', 'Expected safe-failure error payload');
+  assert.equal(res.getStatus(), 503, 'Expected 503 Service Unavailable when Razorpay is not configured');
+  assert.equal(res.getBody().error, 'Billing temporarily unavailable', 'Expected safe-failure error payload');
   assert.notEqual(mockUser.tier, 'pro', 'User was incorrectly upgraded to Pro tier during failure!');
 
   console.log(`${green}✔ [PASSED]${reset} Billing upgrade fails safely with 503 and protects free tier.`);
@@ -128,16 +166,17 @@ async function testWebhookSignatureEnforcement() {
   console.log('\n🛡️  3. Verifying webhook signature validation enforcements in production...');
 
   const req = {
-    headers: {}, // No stripe-signature header
-    body: { type: 'checkout.session.completed', data: { object: { id: 'cs_test' } } },
+    headers: {}, // No signature header
+    body: { event: 'subscription.activated', payload: { subscription: { entity: { id: 'sub_test_123', status: 'active' } } } },
     originalUrl: '/api/v1/billing/webhook',
   };
 
   const res = createMockResponse();
 
-  // Configure Stripe keys to trigger signature path
-  process.env.STRIPE_API_KEY = 'sk_test_bypass_test_antigravity';
-  process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_bypass_test_antigravity';
+  // Configure keys to trigger signature path
+  process.env.RAZORPAY_KEY_ID = 'rzp_test_bypass';
+  process.env.RAZORPAY_KEY_SECRET = 'rzp_secret_bypass';
+  process.env.RAZORPAY_WEBHOOK_SECRET = 'whsec_test_bypass';
   process.env.NODE_ENV = 'production';
 
   // Hot-reload router
@@ -150,10 +189,10 @@ async function testWebhookSignatureEnforcement() {
     if (err) throw err;
   });
 
-  assert.equal(res.getStatus(), 400, 'Expected 400 Bad Request when signature header is missing');
-  assert.ok(
-    res.getBody().includes('Webhook Error: Stripe signature and secret are mandatory') ||
-    res.getBody().error === 'STRIPE_DISABLED',
+  assert.equal(res.getStatus(), 503, 'Expected 503 Service Unavailable when signature header is missing');
+  assert.equal(
+    res.getBody().error,
+    'Billing temporarily unavailable',
     'Missing signature bypass rejected message'
   );
 
@@ -164,8 +203,12 @@ async function testWebhookSignatureEnforcement() {
 async function testEntitlementReconciliation() {
   console.log('\n🛡️  4. Testing webhook reconciliation synchronization logic...');
 
-  // Mock Stripe API key configuration
-  process.env.STRIPE_API_KEY = 'sk_test_mock_keys_antigravity';
+  // Mock Razorpay config
+  process.env.RAZORPAY_KEY_ID = 'rzp_test_mock';
+  process.env.RAZORPAY_KEY_SECRET = 'rzp_secret_mock';
+
+  delete require.cache[require.resolve('../src/config/razorpay')];
+  delete require.cache[require.resolve('../src/services/billingReconciliation')];
 
   const User = require('../src/models/User');
   const userRepository = require('../src/repositories/UserRepository');
@@ -192,7 +235,11 @@ async function testEntitlementReconciliation() {
     _id: fakeId,
     username: 'tester',
     tier: 'pro',
-    stripeCustomerId: null,
+    billing: {
+      customerId: null,
+      subscriptionId: null,
+      status: null
+    },
     save: async function() {
       userSaved = true;
       return this;
@@ -214,7 +261,7 @@ async function testEntitlementReconciliation() {
   const resDowngrade = await reconcileUserEntitlement(fakeId);
   assert.equal(resDowngrade.success, true);
   assert.equal(resDowngrade.reconciled, true);
-  assert.equal(resDowngrade.action, 'downgraded_no_customer');
+  assert.equal(resDowngrade.action, 'downgraded_no_subscription');
   assert.equal(mockUserInstance.tier, 'free');
   assert.equal(userSaved, true);
 
@@ -224,7 +271,7 @@ async function testEntitlementReconciliation() {
 async function runAll() {
   try {
     testEnvironmentValidation();
-    await testSafeFailureOnMissingStripe();
+    await testSafeFailureOnMissingRazorpay();
     await testWebhookSignatureEnforcement();
     await testEntitlementReconciliation();
     

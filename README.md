@@ -90,7 +90,7 @@ graph TD
 
 ### 3. Monetization Overview
 - **Conversion Gating:** Deep text summarization, formula solving, and textbook chunking require a **Cognitive Elite Pro** subscription.
-- **Automatic Reconciliation:** Automatically reconciles subscription actions through Stripe Webhook events.
+- **Automatic Reconciliation:** Automatically reconciles subscription actions through Razorpay Webhook events.
 
 ---
 
@@ -153,7 +153,7 @@ sequenceDiagram
   Founder->>Investor: 1. Launch Landing Page Sandbox & spawn XP particles (+20 XP)
   Founder->>Investor: 2. Click "Wave Equation" chip in AI Assistant to stream answer
   Founder->>Investor: 3. Click "Summarize Logs" -> Triggers Premium Lock Upgrade gate
-  Founder->>Investor: 4. Complete Stripe Upgrade -> Real-Time Dashboard Unlocks
+  Founder->>Investor: 4. Complete Razorpay Upgrade -> Real-Time Dashboard Unlocks
 ```
 
 ### 1. Step-by-Step Walkthrough Flow
@@ -162,13 +162,13 @@ sequenceDiagram
 2. **0:45 - 1:30: The Defensible Core (AI Textbook Engine)**
    - *"Now, I query our Gemini AI Companion on wave equations. The response streams live using SSE. Let's ask for the CS corridor summary: Boom. Upgrades pop-up. We block intensive processes behind an elegant payment wall."*
 3. **1:30 - 2:30: The Real-Time Dashboard & Mobile**
-   - *"Let's unlock the workspace: I simulate Stripe payment. Instantly, our real-time Socket.IO study room dashboard mounts. Over on the mobile Expo side, the offline-first todo synchronizer ensures students remain locked-in on the go."*
+   - *"Let's unlock the workspace: I simulate Razorpay payment. Instantly, our real-time Socket.IO study room dashboard mounts. Over on the mobile Expo side, the offline-first todo synchronizer ensures students remain locked-in on the go."*
 4. **2:30 - 3:00: Closing & Scale Metrics**
    - *"Under the hood, we are fully Dockerized, monitored by Prometheus, and ready to scale to 100k users. Scholar represents the absolute future of student study workflows."*
 
 ### 📸 Portfolio Screenshots Checklist
 - [ ] **Slide 1:** Public Hero section featuring Headline A/B variation testing widgets.
 - [ ] **Slide 2:** Interactive study room showcasing ticking clocks and real-time presence.
-- [ ] **Slide 3:** The Premium AI Assistant showing the Stripe payment gateway lock overlay.
+- [ ] **Slide 3:** The Premium AI Assistant showing the Razorpay payment gateway lock overlay.
 - [ ] **Slide 4:** Mobile Expo app showcasing glassmorphic onboarding.
 - [ ] **Slide 5:** Prometheus Grafana dashboard displaying active connection counts and API latency.

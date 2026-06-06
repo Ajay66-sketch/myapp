@@ -26,6 +26,14 @@ const onRefreshed = (token: string) => {
   refreshSubscribers = []
 }
 
+function getCookie(name: string): string {
+  if (typeof document === 'undefined') return ''
+  const value = `; ${document.cookie}`
+  const parts = value.split(`; ${name}=`)
+  if (parts.length === 2) return parts.pop()?.split(';').shift() || ''
+  return ''
+}
+
 // Low-level fetch wrapper with automatic re-auth / refresh interceptor
 async function request(path: string, options: RequestInit = {}): Promise<any> {
   const url = `${VITE_API_URL}${path}`
@@ -38,14 +46,28 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
     headers.set('Content-Type', 'application/json')
   }
 
-  const response = await fetch(url, { ...options, headers })
+  // Double-Submit Cookie CSRF header handling
+  const csrfToken = getCookie('csrfToken')
+  if (csrfToken) {
+    headers.set('X-CSRF-Token', csrfToken)
+  }
+
+  const response = await fetch(url, {
+    credentials: 'include',
+    ...options,
+    headers
+  })
 
   if (response.status === 401 && !path.includes('/auth/refresh') && !path.includes('/auth/login')) {
     if (isRefreshing) {
       return new Promise((resolve) => {
         subscribeTokenRefresh((token) => {
           headers.set('Authorization', `Bearer ${token}`)
-          resolve(fetch(url, { ...options, headers }).then((res) => res.json()))
+          resolve(fetch(url, {
+            credentials: 'include',
+            ...options,
+            headers
+          }).then((res) => res.json()))
         })
       })
     }
@@ -57,7 +79,7 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
       const refreshRes = await fetch(refreshUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // If cookies are used, credentials are automatically passed
+        credentials: 'include',
       })
 
       if (refreshRes.ok) {
@@ -69,7 +91,11 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
 
         // Retry the original request
         headers.set('Authorization', `Bearer ${newToken}`)
-        const retryRes = await fetch(url, { ...options, headers })
+        const retryRes = await fetch(url, {
+          credentials: 'include',
+          ...options,
+          headers
+        })
         return await retryRes.json()
       } else {
         isRefreshing = false

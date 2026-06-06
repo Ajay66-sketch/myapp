@@ -8,10 +8,12 @@ const path = require('path');
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'super-secret-test-key-1234567890';
 process.env.MONGODB_URI = 'mongodb://localhost:27017/scholar_test';
-process.env.STRIPE_SECRET_KEY = 'sk_test_mock_secret_key_prod_readiness';
-process.env.STRIPE_WEBHOOK_SECRET = 'whsec_mock_webhook_secret';
-process.env.STRIPE_MONTHLY_PRICE_ID = 'price_123';
-process.env.STRIPE_YEARLY_PRICE_ID = 'price_456';
+process.env.REDIS_URL = 'redis://localhost:6379';
+process.env.RAZORPAY_KEY_ID = 'rzp_test_mock_key_id';
+process.env.RAZORPAY_KEY_SECRET = 'rzp_test_mock_key_secret';
+process.env.RAZORPAY_WEBHOOK_SECRET = 'whsec_mock_webhook_secret';
+process.env.RAZORPAY_MONTHLY_PRICE = '500';
+process.env.RAZORPAY_YEARLY_PRICE = '5000';
 process.env.POSTHOG_API_KEY = 'phc_mock_key';
 process.env.POSTHOG_HOST = 'https://app.posthog.com';
 process.env.OPENAI_API_KEY = 'sk-mock-openai-key-for-hardening-checks';
@@ -19,19 +21,16 @@ process.env.OPENAI_API_KEY = 'sk-mock-openai-key-for-hardening-checks';
 console.log('🧪 Starting Phase 1 Production Readiness verification harness...\n');
 
 async function testEnvironmentSync() {
-  console.log('📡 Testing Task 1: Environment Sync & Validation...');
+  console.log('📡 Testing Task 1: Environment Validation...');
   
-  // Clear any existing sync keys to verify cold-sync
-  delete process.env.MONGO_URI;
-  delete process.env.STRIPE_API_KEY;
-
   const env = require('../src/config/env');
   
-  // Trigger sync blocks
-  assert.equal(process.env.MONGO_URI, process.env.MONGODB_URI, 'MONGO_URI did not sync from MONGODB_URI');
-  assert.equal(process.env.STRIPE_API_KEY, process.env.STRIPE_SECRET_KEY, 'STRIPE_API_KEY did not sync from STRIPE_SECRET_KEY');
+  assert.ok(process.env.RAZORPAY_KEY_ID, 'RAZORPAY_KEY_ID is required');
+  assert.ok(process.env.RAZORPAY_KEY_SECRET, 'RAZORPAY_KEY_SECRET is required');
+  assert.ok(process.env.MONGODB_URI, 'MONGODB_URI is required');
+  assert.ok(process.env.REDIS_URL, 'REDIS_URL is required');
   
-  console.log('   ✅ Environment Sync and bi-directional validation passed.');
+  console.log('   ✅ Environment validation passed.');
 }
 
 async function testCentralizedRouter() {

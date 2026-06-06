@@ -14,12 +14,12 @@ This checklist compiles all critical pre-flight verification gates and operation
 
 ---
 
-## 💳 2. Billing & Stripe Integrations
-- [ ] **Stripe Production Secret Keys**: Transition from `sk_test_*` and `pk_test_*` credentials to active production credentials.
+## 💳 2. Billing & Razorpay Integrations
+- [ ] **Razorpay Production Secret Keys**: Transition from `rzp_test_*` credentials to active production credentials.
 - [ ] **Webhooks Registration**:
-  - Register the staging and production webhook endpoint URLs (e.g. `https://api.scholar.antigravity.io/v1/billing/webhook`) inside the Stripe developers dashboard.
-  - Subscribe to events: `invoice.paid`, `invoice.payment_failed`, `customer.subscription.deleted`.
-- [ ] **Webhook Signature Verification**: Securely record and validation match `STRIPE_WEBHOOK_SECRET` keys.
+  - Register the staging and production webhook endpoint URLs (e.g. `https://api.scholar.antigravity.io/v1/billing/webhook`) inside the Razorpay developers dashboard.
+  - Subscribe to the appropriate subscription/payment webhook events.
+- [ ] **Webhook Signature Verification**: Securely record and validation match `RAZORPAY_WEBHOOK_SECRET` keys.
 - [ ] **Billing Grace Cycles**: Verify grace intervals (7-day period for failed payments) trigger automated email notifications before final Pro tier revocation.
 
 ---

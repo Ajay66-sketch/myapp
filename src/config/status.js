@@ -11,16 +11,27 @@ const status = {
     message: 'Socket.IO not initialized',
   },
   database: {
-    mode: process.env.MONGO_URI ? 'mongodb' : 'memory',
+    mode: process.env.MONGODB_URI ? 'mongodb' : 'memory',
     connected: false,
-    message: process.env.MONGO_URI ? 'MongoDB connection pending' : 'Using in-memory storage (dev mode)',
+    message: process.env.MONGODB_URI ? 'MongoDB connection pending' : 'Using in-memory storage (dev mode)',
   },
   redis: {
-    enabled: Boolean(process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDIS_PORT),
+    get enabled() {
+      return Boolean(process.env.REDIS_URL);
+    },
     connected: false,
-    message: process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDIS_PORT
-      ? 'Redis connection pending'
-      : 'Redis not configured',
+    get message() {
+      if (this._message) return this._message;
+      if (this.connected) {
+        return 'Redis connected and enabled';
+      }
+      return process.env.REDIS_URL
+        ? 'Redis connection pending'
+        : 'Redis not configured';
+    },
+    set message(val) {
+      this._message = val;
+    }
   },
 };
 
@@ -48,6 +59,7 @@ const setDatabaseConnected = (connected, host = null) => {
   status.database.connected = connected;
   if (connected) {
     status.database.message = `Connected to MongoDB at ${host || 'unknown host'}`;
+    status.database.mode = 'mongodb';
   } else if (status.database.mode === 'mongodb') {
     status.database.message = 'MongoDB unavailable - using in-memory fallback';
     status.database.mode = 'memory';

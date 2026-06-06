@@ -18,7 +18,7 @@ function getPlan(user) {
 
     const tier = String(user.tier).toLowerCase();
 
-    if (tier === 'premium') {
+    if (tier === 'premium' || tier === 'grace_period') {
       return plans.PRO_PLAN;
     }
 

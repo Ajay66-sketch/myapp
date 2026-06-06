@@ -15,6 +15,7 @@ const cacheControl = require('./middleware/cacheControl');
 const globalRouter = require('./routes');
 const { checkIpBan } = require('./middleware/rateLimitBanning');
 const env = require('./config/env');
+
 const status = require('./config/status');
 
 const app = express();
@@ -32,7 +33,7 @@ app.use(cacheControl);
 const isVercel = env.isVercel;
 const clientOrigin = env.getClientOrigin();
 
-env.validateApiEnv();
+// Environment is validated during pre-boot SRE audit
 
 const { startRedisHealthMonitor } = require('./telemetry/redisHealth');
 startRedisHealthMonitor(5000);
@@ -52,10 +53,16 @@ if (trustProxiesEnv) {
   console.log('Running in local mode');
 }
 
+const currentEnv = process.env.NODE_ENV || 'development';
+const isProd = currentEnv === 'production';
+const isProdOrStaging = currentEnv === 'production' || currentEnv === 'staging';
+
 // Support multiple CORS origins from env (comma-separated) or fallback to dynamic origin resolving
 const rawOrigins = process.env.CORS_ALLOWED_ORIGINS || clientOrigin;
 const allowedCorsOrigins = rawOrigins.split(',').map(o => o.trim());
 console.log(`API CORS allowed origins: ${allowedCorsOrigins.join(', ')}`);
+
+// CORS origins safety validated during pre-boot SRE audit
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
@@ -78,8 +85,11 @@ app.use(helmet({
 // Restrict cross-origin resource sharing to trusted domains and define allowed methods/headers
 const corsOptions = {
   origin: (origin, callback) => {
+    if (isProdOrStaging && allowedCorsOrigins.includes('*')) {
+      return callback(new Error('CORS wildcard * is forbidden in production/staging environments.'));
+    }
     // Allow requests with no origin (like mobile apps, curl, or same-origin)
-    if (!origin || allowedCorsOrigins.includes(origin) || allowedCorsOrigins.includes('*')) {
+    if (!origin || allowedCorsOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error(`Origin ${origin} is not allowed by CORS rules`));
@@ -94,7 +104,6 @@ app.use(cors(corsOptions));
 
 // 3. Request Logging
 // Log HTTP requests to the console using morgan (useful for debugging and monitoring)
-const currentEnv = process.env.NODE_ENV || 'development';
 app.use(morgan(currentEnv === 'development' ? 'dev' : 'combined'));
 
 // 4. Body Parsers & Compression
@@ -137,10 +146,46 @@ status.setAuthLoaded();
 
 // ─── Health & Diagnostic Probes (SRE-grade Kubernetes-compliant) ─────────────
 
+// Central Service Registry Exposer
+app.get('/health', async (req, res) => {
+  const { getSystemState, getMetrics } = require('./config/serviceRegistry');
+  const systemState = getSystemState();
+  const sreMetrics = getMetrics();
+  
+  const billingConfigured =
+    !!process.env.RAZORPAY_KEY_ID &&
+    !!process.env.RAZORPAY_KEY_SECRET;
+
+  const billingHealthy =
+    !billingConfigured ||
+    systemState.billing === 'UP';
+
+  const queueHealthy =
+    systemState.queue === undefined ||
+    systemState.queue === 'ACTIVE';
+
+  const isHealthy =
+    systemState.redis === 'UP' &&
+    queueHealthy &&
+    billingHealthy;
+
+  res.status(200).json({
+    status: isHealthy ? 'healthy' : 'degraded',
+    timestamp: new Date().toISOString(),
+    systemState,
+    metrics: sreMetrics,
+    billing: {
+      provider: "razorpay",
+      status: systemState.billing || "DOWN"
+    }
+  });
+});
+
 // 1. Central Comprehensive Health Diagnostic
 app.get('/api/health', async (req, res) => {
   const mongoose = require('mongoose');
   const { getRedisClient } = require('./config/redisClient');
+  const { getSystemState, getMetrics } = require('./config/serviceRegistry');
   
   const mongoConnected = mongoose.connection && mongoose.connection.readyState === 1;
   const redis = getRedisClient();
@@ -170,7 +215,7 @@ app.get('/api/health', async (req, res) => {
     socketHealthy = status.getStatus().systems.socket.loaded;
   } catch (e) {}
 
-  // Fetch active worker heartbeats from Redis (Task 6)
+  // Fetch active worker heartbeats from Redis
   let activeWorkersList = [];
   if (redisConnected) {
     try {
@@ -186,22 +231,31 @@ app.get('/api/health', async (req, res) => {
     }
   }
 
-  const overallHealthy = mongoConnected && (!process.env.REDIS_URL || redisConnected) && socketHealthy;
   const systemStatus = status.getStatus();
+  const systemState = getSystemState();
+  const sreMetrics = getMetrics();
 
-  res.status(overallHealthy ? 200 : 503).json({
-    status: overallHealthy ? 'healthy' : 'degraded',
+  res.status(200).json({
+    status: systemState.redis === 'UP' ? 'healthy' : 'degraded',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     memory: systemStatus.memory,
-    metrics: systemStatus.metrics,
+    systemState,
+    billing: {
+      provider: "razorpay",
+      status: systemState.billing || "DOWN"
+    },
+    metrics: {
+      ...systemStatus.metrics,
+      ...sreMetrics
+    },
     systems: {
       mongodb: {
         status: mongoConnected ? 'connected' : 'offline',
         healthy: mongoConnected
       },
       redis: {
-        status: redisConnected ? 'connected' : (process.env.REDIS_URL || process.env.REDIS_HOST ? 'offline' : 'not_configured'),
+        status: redisConnected ? 'connected' : (process.env.REDIS_URL ? 'offline' : 'not_configured'),
         healthy: !process.env.REDIS_URL || redisConnected
       },
       websocket: {

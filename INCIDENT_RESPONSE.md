@@ -81,22 +81,19 @@ This playbook provides standard operating procedures for detecting, triaging, mi
 
 ---
 
-### Incident 4: Stripe Webhook Delivery Processing Failures (SEV-2)
+### Incident 4: Razorpay Webhook Delivery Processing Failures (SEV-2)
 
 #### 1. Symptoms
 - Customers complain subscriptions are paid but focus levels are not upgraded.
 - Express logs print: `Webhook signature verification failed`.
 
 #### 2. Triage & Actions
-1. **Verify raw body parser**:
-   Ensure `express.json` is saving raw buffers in `req.rawBody` for webhook requests (configured in `src/app.js`).
+1. **Verify signature logic**:
+   Ensure `req.headers['x-razorpay-signature']` is present and valid.
 2. **Verify secret integrity**:
-   Confirm that the `STRIPE_WEBHOOK_SECRET` in environment variables matches the secret in the Stripe Dashboard Webhook configuration. If Stripe rotated the webhook secret, update it immediately.
+   Confirm that the `RAZORPAY_WEBHOOK_SECRET` in environment variables matches the secret in the Razorpay Dashboard Webhook configuration. If rotated, update it immediately.
 3. **Simulate a delivery**:
-   Use Stripe CLI to resend:
-   ```bash
-   stripe trigger customer.subscription.created --api-key sk_test_...
-   ```
+   Use cURL to POST a simulated Razorpay webhook JSON payload.
 
 ---
 

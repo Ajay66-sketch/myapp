@@ -56,4 +56,4 @@ Lifecycle alerts are generated in the background by separate BullMQ workers usin
 | :--- | :--- | :--- | :--- |
 | **User Sign-up** | Account Created | **Onboarding Welcome**: Details Quickstart guides and enters user into Day-1 checklist. | Launch Workspace |
 | **Trial Ending** | 90% Free credits spent | **Quota Warning**: Warns user of credit limits and details premium benefits of Pro. | Upgrade to Pro |
-| **Failed Billing** | Stripe Webhook (`invoice.payment_failed`) | **Payment Recovery Alert**: Notifies user of a 7-day billing grace period. | Update Credit Card |
+| **Failed Billing** | Razorpay Webhook (`subscription.pending`) | **Payment Recovery Alert**: Notifies user of a 7-day billing grace period. | Update Credit Card |

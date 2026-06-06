@@ -13,11 +13,11 @@ const auditLogSchema = new mongoose.Schema({
     type: String,
     required: true,
     index: true
-  }, // e.g. "stripe_upgrade_succeeded", "dunning_grace_period_enforced", "gdpr_erase"
+  }, // e.g. "razorpay_upgrade_succeeded", "dunning_grace_period_enforced", "gdpr_erase"
   performedBy: {
     type: String,
     required: true,
-    default: 'system' // e.g. "system", "stripe_webhook", "admin_user_id"
+    default: 'system' // e.g. "system", "razorpay_webhook", "admin_user_id"
   },
   ipAddress: {
     type: String,

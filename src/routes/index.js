@@ -30,7 +30,11 @@ const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: 'Too many requests from this IP, please try again after 15 minutes',
-  handler: rateLimitHandler
+  handler: rateLimitHandler,
+  skip: (req) => {
+    return (req.originalUrl && (req.originalUrl.includes('/webhook') || req.originalUrl.includes('/billing/webhook'))) ||
+           (req.path && (req.path.includes('/webhook') || req.path.includes('/billing/webhook')));
+  }
 });
 
 // ─── Versioned V1 Routing Pipeline ──────────────────────────────────────────

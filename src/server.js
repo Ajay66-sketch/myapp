@@ -1,8 +1,12 @@
 // src/server.js
 // Entry point - sets up Express, Socket.io, and connects to MongoDB
 
+require('./config/envLoader'); // Load environment variables first
+require('events').EventEmitter.defaultMaxListeners = 50; // globally harden against MaxListenersExceeded (Fix 5)
+require('./config/redis.singleton'); // Pre-register global getRedisSingleton
+require('./config/infraState'); // Pre-register global System of Record
+const { startInfraReconciler } = require('./config/infraReconciler');
 require('./telemetry/tracing'); // Initialize OpenTelemetry before any other imports
-require('dotenv').config();
 const http = require('http');
 const app = require('./app');
 const connectDB = require('./config/db');
@@ -30,8 +34,8 @@ async function validateStartupDependencies() {
   status.setDatabaseConnected(true, mongoHost);
 
   // 2. Validate Redis
-  const { getRedisClient } = require('./config/redisClient');
-  const redisClient = getRedisClient();
+  const { getRedisSingleton } = require('./config/redis.singleton');
+  const redisClient = getRedisSingleton();
   
   if (!redisClient) {
     console.error('❌ [Startup check] Redis client could not be instantiated in production/staging! Boot halted.');
@@ -40,6 +44,7 @@ async function validateStartupDependencies() {
 
   // Wait up to 5 seconds for Redis to become ready
   const checkRedisReady = () => {
+    const systemEventBus = require('./telemetry/eventBus');
     return new Promise((resolve) => {
       if (redisClient.status === 'ready') return resolve(true);
       
@@ -48,7 +53,7 @@ async function validateStartupDependencies() {
         resolve(true);
       };
       
-      const onError = (err) => {
+      const onError = () => {
         cleanup();
         resolve(false);
       };
@@ -60,12 +65,12 @@ async function validateStartupDependencies() {
       
       function cleanup() {
         clearTimeout(timer);
-        redisClient.removeListener('ready', onReady);
-        redisClient.removeListener('error', onError);
+        systemEventBus.removeListener('redis:ready', onReady);
+        systemEventBus.removeListener('redis:error', onError);
       }
       
-      redisClient.once('ready', onReady);
-      redisClient.once('error', onError);
+      systemEventBus.once('redis:ready', onReady);
+      systemEventBus.once('redis:error', onError);
     });
   };
 
@@ -83,8 +88,19 @@ async function startServer() {
   // Load secrets from HashiCorp Vault dynamically at runtime
   await loadVaultSecrets();
 
+  // Start the deterministic State Reconciliation Engine
+  startInfraReconciler();
+
   // Run strict SRE dependency validations
   await validateStartupDependencies();
+
+  // Start billing reconciliation scheduler
+  try {
+    const { startBillingReconciliationScheduler } = require('./services/billingReconciliation');
+    startBillingReconciliationScheduler();
+  } catch (err) {
+    console.error('Failed to start billing reconciliation scheduler:', err.message);
+  }
 
   const explicitPort = process.env.API_PORT || process.env.BACKEND_PORT;
   const fallbackPort = process.env.PORT && process.env.PORT !== '3000' ? process.env.PORT : undefined;
@@ -102,7 +118,7 @@ async function startServer() {
   // Bind non-production database connection fallbacks if not already verified
   const isProdOrStaging = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
   if (!isProdOrStaging) {
-    const hasMongo = Boolean(process.env.MONGO_URI);
+    const hasMongo = Boolean(process.env.MONGODB_URI);
     if (hasMongo) {
       const host = await connectDB().catch(() => null);
       status.setDatabaseConnected(Boolean(host), host);
@@ -110,12 +126,10 @@ async function startServer() {
       status.setDatabaseConnected(false);
     }
 
-    const { getRedisClient } = require('./config/redisClient');
-    const redis = getRedisClient();
+    const { getRedisSingleton } = require('./config/redis.singleton');
+    const redis = getRedisSingleton();
     if (redis) {
       status.setRedisConnected(redis.status === 'ready');
-      redis.on('ready', () => status.setRedisConnected(true));
-      redis.on('end', () => status.setRedisConnected(false));
     }
   }
 

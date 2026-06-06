@@ -72,10 +72,11 @@ The server runs strict pre-flight gates on boot. The server **WILL CRASH IMMEDIA
 | **Security** | `COOKIE_SECURE` | No | `true` | `true` | Enforces HTTPS cookie transmission. |
 | **Security** | `DISABLE_CSRF` | No | `false` | `false` | Stateless double-submit cookie gate. |
 | **Security** | `TRUST_PROXIES` | No | `1` | `1` | Configures Express trust proxy headers. |
-| **Billing** | `STRIPE_API_KEY` | Yes | `sk_test_...` | `sk_live_...` | Stripe payment secret key. |
-| **Billing** | `STRIPE_WEBHOOK_SECRET`| Yes | `whsec_...` | `whsec_...` | Stripe security verification payload key. |
-| **Billing** | `STRIPE_MONTHLY_PRICE_ID`| Yes | `price_...` | `price_...` | Monthly tier ID. |
-| **Billing** | `STRIPE_YEARLY_PRICE_ID`| Yes | `price_...` | `price_...` | Yearly tier ID. |
+| **Billing** | `RAZORPAY_KEY_ID` | Yes | `rzp_test_...` | `rzp_live_...` | Razorpay Key ID. |
+| **Billing** | `RAZORPAY_KEY_SECRET`| Yes | `sk_test_...` | `sk_live_...` | Razorpay Key Secret. |
+| **Billing** | `RAZORPAY_WEBHOOK_SECRET`| Yes | `whsec_...` | `whsec_...` | Razorpay Webhook signature verification key. |
+| **Billing** | `RAZORPAY_MONTHLY_PRICE`| Yes | `500` | `500` | Monthly price amount. |
+| **Billing** | `RAZORPAY_YEARLY_PRICE`| Yes | `5000` | `5000` | Yearly price amount. |
 
 ---
 

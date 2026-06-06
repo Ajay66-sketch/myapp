@@ -15,10 +15,7 @@ const router = express.Router();
 // Enforce authentication safeguards on all compliance routes
 router.use(protect);
 
-let stripe = null;
-if (process.env.STRIPE_API_KEY) {
-  stripe = require('stripe')(process.env.STRIPE_API_KEY);
-}
+const { getRazorpayClient } = require('../config/razorpay');
 
 /**
  * GET /api/v1/compliance/export
@@ -70,21 +67,19 @@ router.get('/export', async (req, res) => {
 router.delete('/forget', async (req, res) => {
   try {
     const userId = req.user._id;
-    const stripeCustomerId = req.user.stripeCustomerId;
+    const subId = req.user.billing?.subscriptionId;
 
     console.log(`🧹 [GDPR Erasure] Commencing permanent data purge for user: ${userId} (${req.user.email})`);
 
-    // 1. Terminate active Stripe Subscriptions if exists
-    if (stripe && stripeCustomerId) {
+    // 1. Terminate active Razorpay Subscription if exists
+    const rzp = getRazorpayClient();
+    if (rzp && subId) {
       try {
-        console.log(`💳 [GDPR Erasure] Releasing Stripe Subscriptions for Customer: ${stripeCustomerId}`);
-        const subscriptions = await stripe.subscriptions.list({ customer: stripeCustomerId });
-        for (const sub of subscriptions.data) {
-          await stripe.subscriptions.cancel(sub.id);
-          console.log(`[Stripe Release] Cancelled subscription: ${sub.id}`);
-        }
+        console.log(`💳 [GDPR Erasure] Releasing Razorpay Subscription: ${subId}`);
+        await rzp.subscriptions.cancel(subId, false);
+        console.log(`[Razorpay Release] Cancelled subscription: ${subId}`);
       } catch (err) {
-        console.warn('[GDPR Erasure] Stripe subscription release skip/failed:', err.message);
+        console.warn('[GDPR Erasure] Razorpay subscription release skip/failed:', err.message);
       }
     }
 

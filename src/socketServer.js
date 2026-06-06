@@ -1,7 +1,9 @@
 // src/socketServer.js
 // Standalone persistent realtime server for Socket.IO
 
-require('dotenv').config();
+require('events').EventEmitter.defaultMaxListeners = 50; // globally harden against MaxListenersExceeded (Fix 5)
+require('./config/envLoader');
+require('./config/redis.singleton'); // Pre-register global getRedisSingleton
 const http = require('http');
 const express = require('express');
 const cors = require('cors');
@@ -20,6 +22,10 @@ app.use(helmet());
 app.use(
   cors({
     origin: (origin, callback) => {
+      const isProdOrStaging = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
+      if (isProdOrStaging && allowedOrigins.includes('*')) {
+        return callback(new Error('CORS wildcard * is forbidden in production/staging environments.'));
+      }
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
@@ -48,10 +54,10 @@ console.log(`Socket server allowed origins: ${allowedOrigins.join(', ')}`);
 console.log(`Socket client URL: ${env.getSocketOrigin()}`);
 console.log(`API URL: ${env.getApiOrigin()}`);
 
-if (process.env.MONGO_URI) {
+if (process.env.MONGODB_URI) {
   connectDB();
 } else {
-  console.warn('⚠️ MongoDB disabled for realtime server (MONGO_URI not set). Running without database.');
+  console.warn('⚠️ MongoDB disabled for realtime server (MONGODB_URI not set). Running without database.');
 }
 
 const server = http.createServer(app);

@@ -9,15 +9,16 @@ const path = require('path');
 process.env.NODE_ENV = 'production';
 process.env.JWT_SECRET = 'ci-verification-unsafe-jwt-secret-antigravity';
 process.env.DISABLE_CSRF = 'true'; // Allow bypass for CI smoke testing
-process.env.MONGO_URI = 'mongodb://localhost:27017/ci-test-db';
+process.env.MONGODB_URI = 'mongodb://localhost:27017/ci-test-db';
 process.env.REDIS_URL = 'redis://localhost:6379';
 process.env.CLIENT_URL = 'http://localhost:3000';
 
-// Mock Stripe secrets for production pre-boot validation checks
-process.env.STRIPE_API_KEY = 'sk_test_verify_build_mock_key';
-process.env.STRIPE_WEBHOOK_SECRET = 'whsec_verify_build_mock_key';
-process.env.STRIPE_MONTHLY_PRICE_ID = 'price_monthly_verify_build_mock';
-process.env.STRIPE_YEARLY_PRICE_ID = 'price_yearly_verify_build_mock';
+// Mock Razorpay secrets for production pre-boot validation checks
+process.env.RAZORPAY_KEY_ID = 'rzp_test_verify_build_mock_key';
+process.env.RAZORPAY_KEY_SECRET = 'rzp_test_verify_build_mock_secret';
+process.env.RAZORPAY_WEBHOOK_SECRET = 'whsec_verify_build_mock_key';
+process.env.RAZORPAY_MONTHLY_PRICE = '500';
+process.env.RAZORPAY_YEARLY_PRICE = '5000';
 
 // Mock PostHog secrets for production pre-boot validation checks
 process.env.POSTHOG_API_KEY = 'phc_test_verify_build_mock_key';

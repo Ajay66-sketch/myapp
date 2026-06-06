@@ -40,7 +40,7 @@ export function MonetizationUpgrade() {
     }
 
     try {
-      setMessage('Initiating Stripe subscription billing portal...')
+      setMessage('Initiating Razorpay subscription order...')
       const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1'}/billing/upgrade`, {
         method: 'POST',
         headers: {
@@ -52,22 +52,74 @@ export function MonetizationUpgrade() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.message || 'Failed to initiate Stripe checkout')
+        throw new Error(errorData.message || 'Failed to initiate Razorpay checkout')
       }
 
       const data = await response.json()
-      if (data.status === 'redirect' && data.sessionUrl) {
-        setMessage('Redirecting to secure Stripe payment page... 🚀')
-        setTimeout(() => {
-          window.location.href = data.sessionUrl
-        }, 1000)
+      if (data.status === 'order_created' && data.orderId) {
+        const loadRazorpayScript = () => {
+          return new Promise((resolve) => {
+            if ((window as any).Razorpay) {
+              resolve(true)
+              return
+            }
+            const script = document.createElement('script')
+            script.src = 'https://checkout.razorpay.com/v1/checkout.js'
+            script.onload = () => resolve(true)
+            script.onerror = () => resolve(false)
+            document.body.appendChild(script)
+          })
+        }
+
+        const resScript = await loadRazorpayScript()
+        if (!resScript) {
+          throw new Error('Razorpay SDK failed to load. Please check your network connection.')
+        }
+
+        setMessage('Opening secure Razorpay payment gateway... 🚀')
+        const options = {
+          key: data.keyId,
+          amount: data.amount,
+          currency: data.currency,
+          name: 'Scholar Elite',
+          description: `Upgrade to Pro - ${billingCycle}`,
+          order_id: data.orderId,
+          handler: async function (response: any) {
+            setMessage('Payment authorization successful! Reconciling... 🚀')
+            setTimeout(() => {
+              const store = useStore.getState();
+              if (store.user) {
+                useStore.setState({
+                  user: { ...store.user, tier: 'pro', streakFreezeCount: 3 }
+                })
+              }
+              setMessage('Upgrade successful! You are now a Pro Elite Scholar! 🚀')
+              setLoading(false)
+            }, 1500)
+          },
+          prefill: {
+            name: user?.username || '',
+            email: user?.email || '',
+          },
+          theme: {
+            color: '#6366f1',
+          },
+          modal: {
+            ondismiss: function () {
+              setMessage('Payment cancelled by user.')
+              setLoading(false)
+            }
+          }
+        }
+
+        const rzp = new (window as any).Razorpay(options)
+        rzp.open()
       } else {
         throw new Error('Invalid billing server response')
       }
     } catch (e: any) {
       console.error('[Billing Checkout Exception]:', e)
-      setMessage(e.message || 'Stripe connection failed. Please contact support.')
-    } finally {
+      setMessage(e.message || 'Razorpay connection failed. Please contact support.')
       setLoading(false)
     }
   }
@@ -188,7 +240,7 @@ export function MonetizationUpgrade() {
               ) : isPro ? (
                 'Already Pro Elite'
               ) : (
-                'Upgrade to Pro via Stripe'
+                'Upgrade to Pro via Razorpay'
               )}
             </button>
 
@@ -228,7 +280,7 @@ export function MonetizationUpgrade() {
         </div>
 
         <div className="upgrade-footer text-center mt-4">
-          <p className="text-muted" style={{ fontSize: '0.75rem' }}>Secured by Stripe billing. Cancel anytime. 30-day money back guarantee.</p>
+          <p className="text-muted" style={{ fontSize: '0.75rem' }}>Secured by Razorpay billing. Cancel anytime. 30-day money back guarantee.</p>
         </div>
       </div>
 

@@ -62,7 +62,7 @@ function getOnboardingHtml(username) {
       <div style="text-align: center; margin-top: 2rem;">
         <a href="http://localhost:5173" style="background: linear-gradient(135deg, #6366f1, #a855f7); color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; font-size: 15px; box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);">Launch Workspace Now 🚀</a>
       </div>
-      <p style="font-size: 12px; color: #64748b; margin-top: 3rem; text-align: center;">Secured by Stripe billing. Cancel anytime. support@antigravity.io</p>
+      <p style="font-size: 12px; color: #64748b; margin-top: 3rem; text-align: center;">Secured by Razorpay billing. Cancel anytime. support@antigravity.io</p>
     </div>
   `;
 }
@@ -78,14 +78,14 @@ function getPaymentRecoveryHtml(username, billingPortalUrl) {
         <p style="color: #94a3b8; font-size: 14px; margin-top: 4px;">Update your credit card details to retain premium benefits</p>
       </div>
       <p style="font-size: 15px; line-height: 1.6; color: #e2e8f0;">Hey <strong>${username}</strong>,</p>
-      <p style="font-size: 15px; line-height: 1.6; color: #e2e8f0;">Your latest Stripe subscription invoice payment failed. We have placed your account in a **7-day billing grace period** so you don't lose access to unlimited corridors, notes scanning, and AI guidance.</p>
+      <p style="font-size: 15px; line-height: 1.6; color: #e2e8f0;">Your latest Razorpay subscription invoice payment failed. We have placed your account in a **7-day billing grace period** so you don't lose access to unlimited corridors, notes scanning, and AI guidance.</p>
       <div style="background-color: rgba(239,68,68,0.08); padding: 1.25rem; border-radius: 8px; margin: 1.5rem 0; border: 1px dashed rgba(239,68,68,0.25);">
         <p style="margin: 0; font-size: 14px; color: #fca5a5; line-height: 1.5;">💡 If billing details are not resolved, your premium membership benefits will be automatically revoked on <strong>${new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toDateString()}</strong>.</p>
       </div>
       <div style="text-align: center; margin-top: 2rem;">
-        <a href="${billingPortalUrl || 'http://localhost:5000/api/v1/billing/portal'}" style="background-color: #ef4444; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; font-size: 15px; box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);">Update Billing Information 💳</a>
+        <a href="${billingPortalUrl || 'http://localhost:5173'}" style="background-color: #ef4444; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; font-size: 15px; box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);">Update Billing Information 💳</a>
       </div>
-      <p style="font-size: 12px; color: #64748b; margin-top: 3rem; text-align: center;">Secured by Stripe customer billing portals. support@antigravity.io</p>
+      <p style="font-size: 12px; color: #64748b; margin-top: 3rem; text-align: center;">Secured by Razorpay billing. support@antigravity.io</p>
     </div>
   `;
 }

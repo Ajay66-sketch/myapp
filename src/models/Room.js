@@ -45,7 +45,4 @@ const roomSchema = new mongoose.Schema(
   }
 );
 
-// Add unique index on slug for fast lookup and strict uniqueness
-roomSchema.index({ slug: 1 });
-
 module.exports = mongoose.model('Room', roomSchema);

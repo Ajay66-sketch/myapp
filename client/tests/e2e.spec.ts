@@ -76,8 +76,8 @@ test.describe('AI Study Focus SaaS MVP E2E Suite', () => {
     await expect(page.locator('.upgrade-modal')).toBeVisible()
     await expect(page.locator('.premium-plan h3')).toContainText('Cognitive Elite Pro')
 
-    // Trigger stripe mock checkout
-    await page.click('button:has-text("Upgrade to Pro via Stripe")')
+    // Trigger razorpay mock checkout
+    await page.click('button:has-text("Upgrade to Pro via Razorpay")')
 
     // Verify entitlement upgrades immediately
     await expect(page.locator('.upgrade-modal')).not.toBeVisible()

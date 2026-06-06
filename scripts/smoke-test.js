@@ -1,6 +1,6 @@
 // scripts/smoke-test.js
 // SRE-grade staging and production automated smoke tester
-// Validates: health endpoints, Redis, BullMQ, Stripe webhooks, and WebSockets.
+// Validates: health endpoints, Redis, BullMQ, Razorpay webhooks, and WebSockets.
 
 const http = require('http');
 const { getRedisClient } = require('../src/config/redisClient');
@@ -114,12 +114,12 @@ async function testBullMqWorkers() {
   }
 }
 
-// 4. Stripe Webhook Raw Body verify checks
-async function testStripeWebhookRawBody() {
-  console.log('\n💳 [Test 4] Verifying Stripe Webhook Endpoint Raw-Body Parsing...');
+// 4. Razorpay Webhook Raw Body verify checks
+async function testRazorpayWebhookRawBody() {
+  console.log('\n💳 [Test 4] Verifying Razorpay Webhook Endpoint Raw-Body Parsing...');
   
   await new Promise((resolve) => {
-    const postData = JSON.stringify({ id: 'evt_test_123', type: 'customer.subscription.created' });
+    const postData = JSON.stringify({ event: 'subscription.activated', payload: { subscription: { entity: { id: 'sub_test_123', status: 'active' } } } });
     
     const options = {
       host: 'localhost',
@@ -128,7 +128,7 @@ async function testStripeWebhookRawBody() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'stripe-signature': 't=123,v1=mock_signature_for_smoke_testing',
+        'x-razorpay-signature': 'mock_signature_for_smoke_testing',
         'Content-Length': Buffer.byteLength(postData)
       },
       timeout: 3000
@@ -138,13 +138,12 @@ async function testStripeWebhookRawBody() {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        // Stripe webhook validation returns 400 when signatures are invalid, but it MUST NOT return 500!
-        // A 500 error represents a crash or raw body parser validation error in routing.
+        // Webhook validation returns 400 when signatures are invalid, but it MUST NOT return 500!
         if (res.statusCode === 500) {
           echoRed(`   ❌ Webhook raw body processing crashed with HTTP 500!`);
           resolve(false);
         } else {
-          echoGreen(`   ✅ Stripe Webhook validated. Responded with HTTP ${res.statusCode} (Security signature validation verified)`);
+          echoGreen(`   ✅ Razorpay Webhook validated. Responded with HTTP ${res.statusCode} (Security signature validation verified)`);
           resolve(true);
         }
       });
@@ -203,7 +202,7 @@ async function runAllTests() {
     
     // Attempt HTTP checks (will warn gracefully if local server is not booted)
     await testHealthEndpoints();
-    await testStripeWebhookRawBody();
+    await testRazorpayWebhookRawBody();
     await testWebsocketScaling();
 
     console.log('\n=====================================================');

@@ -9,7 +9,9 @@ const User = require('../models/User');
 const inMemoryUsers = new Map();
 let inMemoryModeWarned = false;
 
-const isDbAvailable = () => mongoose.connection && mongoose.connection.readyState === 1;
+const isDbAvailable = () => {
+  return mongoose.connection && mongoose.connection.readyState === 1;
+};
 
 const isProductionOrStaging = () => {
   return process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
@@ -25,7 +27,7 @@ const warnInMemoryMode = () => {
   }
 };
 
-const normalizeEmail = (email) => (email || '').toLowerCase();
+const normalizeEmail = (email) => (email || '').trim().toLowerCase();
 
 const findUserByEmail = async (email) => {
   const normalizedEmail = normalizeEmail(email);

@@ -11,7 +11,8 @@ const systemEventBus = require('../src/telemetry/eventBus');
 
 // Set mock environment variables
 process.env.NODE_ENV = 'production';
-process.env.MONGO_URI = 'mongodb://localhost:27017/scholar-test';
+process.env.MONGODB_URI = 'mongodb://localhost:27017/scholar-test';
+process.env.REDIS_URL = 'redis://localhost:6379';
 
 async function runVerification() {
   console.log('🏁 Starting Backend SRE Hardening Verification Suite...\n');

@@ -766,7 +766,7 @@ export function LandingPage() {
                     <li>✨ Live **Streak Freezes** cushions</li>
                   </ul>
                   <button onClick={() => {
-                    addToast('Processing Payment Simulation...', 'Contacting secure Stripe billing portal.', 'info');
+                    addToast('Processing Payment Simulation...', 'Contacting secure Razorpay billing gateway.', 'info');
                     setTimeout(() => {
                       addToast('Upgrade completed successfully! Welcome to Pro Elite!', 'Welcome to the premium elite.', 'success');
                       useStore.setState({
@@ -790,7 +790,7 @@ export function LandingPage() {
                       enterDemoMode();
                     }, 1200);
                   }} className="btn btn-primary btn-block btn-pulse mt-4">
-                    💳 Complete Simulated Stripe Upgrade ($9.99)
+                    💳 Complete Simulated Razorpay Upgrade ($9.99)
                   </button>
                 </div>
               </div>

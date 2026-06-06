@@ -54,12 +54,12 @@ Rotate secrets every **90 days** or immediately following any suspected team cre
    - Keep the old secret in `JWT_SECRET_FALLBACK` (if configured) so existing tokens are validated until they expire (15-minute token TTL).
 3. **Apply and Restart**: Apply variables in Railway/Render dashboard and trigger a rolling update restart.
 
-### B. Stripe Webhook Signing Key Rotation
-If Stripe rotates your webhook webhook keys:
-1. Navigate to the **Stripe Dashboard -> Developers -> Webhooks**.
-2. Click on the production webhook URL, then click **Rotate Secret**.
-3. Copy the new secret string (`whsec_...`).
-4. Update `STRIPE_WEBHOOK_SECRET` in Render/Railway dashboard env variables.
+### B. Razorpay Webhook Signing Key Rotation
+If Razorpay rotates your webhook keys:
+1. Navigate to the **Razorpay Dashboard -> Settings -> Webhooks**.
+2. Select your webhook, then retrieve or rotate the secret key details.
+3. Copy the secret string.
+4. Update `RAZORPAY_WEBHOOK_SECRET` in Render/Railway dashboard env variables.
 5. Trigger a rolling redeploy.
 
 ---

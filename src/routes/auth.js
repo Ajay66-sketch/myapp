@@ -12,7 +12,6 @@ const {
   findUserById,
   findUserByUsername,
   findUserByGoogleId,
-  saveUser,
 } = require('../utils/authStore');
 
 const router = express.Router();
@@ -153,14 +152,14 @@ router.post('/google', async (req, res) => {
     } else if (!user.googleId) {
       user.googleId = googleId;
       if (!user.avatar && picture) user.avatar = picture;
-      await saveUser(user);
+      await user.save();
     }
 
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
     user.refreshToken = refreshToken;
-    await saveUser(user);
+    await user.save();
 
     await registerSessionInRedis(user._id.toString(), refreshToken, req);
 
@@ -195,14 +194,17 @@ router.post('/google', async (req, res) => {
 
 const handleRegister = async (req, res) => {
   try {
-    const { name, email, password, referralCode } = req.body;
+    const email = req.body.email ? req.body.email.trim().toLowerCase() : '';
+    const password = req.body.password ? req.body.password.trim() : '';
+    const referralCode = req.body.referralCode;
 
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: 'Name, email, and password are required' });
+    if (!email || !password) {
+      return res.status(400).json({ message: 'Email and password are required' });
     }
 
-    const normalizedEmail = email.toLowerCase();
-    const existingUser = await findUserByEmail(normalizedEmail);
+    const rawName = req.body.name || req.body.username || email.split('@')[0];
+    const name = rawName.trim();
+    const existingUser = await findUserByEmail(email);
     if (existingUser) {
       return res.status(409).json({ message: 'Email is already taken' });
     }
@@ -212,17 +214,23 @@ const handleRegister = async (req, res) => {
       return res.status(409).json({ message: 'Username is already taken' });
     }
 
-    const user = await createUser({
+    const bcrypt = require('bcryptjs');
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const User = require('../models/User');
+    const user = await User.create({
       username: name,
-      email: normalizedEmail,
-      password,
+      email,
+      password: hashedPassword,
     });
+
+    console.log("[REGISTER] saved user id:", user._id);
 
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
     user.refreshToken = refreshToken;
-    await saveUser(user);
+    await user.save();
 
     // ─── Referral conversion and rewards ──────────────────────────────────────────
     if (referralCode) {
@@ -244,7 +252,7 @@ const handleRegister = async (req, res) => {
 
         if (referrer) {
           user.referralSource = referralCode;
-          await saveUser(user);
+          await user.save();
 
           // Save Referral record
           const Referral = require('../models/Referral');
@@ -313,14 +321,14 @@ router.post('/signup', handleRegister);
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
 router.post('/login', require('../middleware/rateLimitSuspicious').checkSuspiciousBlock, async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const email = req.body.email ? req.body.email.trim().toLowerCase() : '';
+    const password = req.body.password;
 
     if (!email || !password) {
       return res.status(400).json({ message: 'Email and password are required' });
     }
 
-    const normalizedEmail = email.toLowerCase();
-    const user = await findUserByEmail(normalizedEmail);
+    const user = await findUserByEmail(email);
     
     const { getClientIp, recordSuspiciousActivity } = require('../middleware/rateLimitSuspicious');
     const ip = getClientIp(req);
@@ -335,8 +343,11 @@ router.post('/login', require('../middleware/rateLimitSuspicious').checkSuspicio
       return res.status(401).json({ message: 'Please login with Google' });
     }
 
-    const isMatch = await user.comparePassword(password);
-    if (!isMatch) {
+    const bcrypt = require('bcryptjs');
+    const match = await bcrypt.compare(password, user.password);
+    console.log("[LOGIN] bcrypt match result:", match);
+
+    if (match !== true) {
       await recordSuspiciousActivity(ip);
       return res.status(401).json({ message: 'Invalid email or password' });
     }
@@ -345,7 +356,7 @@ router.post('/login', require('../middleware/rateLimitSuspicious').checkSuspicio
     const refreshToken = generateRefreshToken(user);
 
     user.refreshToken = refreshToken;
-    await saveUser(user);
+    await user.save();
 
     await registerSessionInRedis(user._id.toString(), refreshToken, req);
 
@@ -458,7 +469,7 @@ const handleRefresh = async (req, res) => {
 
     // Save in database for fallback compatibility
     user.refreshToken = newRefreshToken;
-    await saveUser(user);
+    await user.save();
 
     // Swap Redis session keys
     if (redis && redis.status === 'ready') {
@@ -500,7 +511,7 @@ router.post('/logout', async (req, res) => {
         const user = await findUserById(userId);
         if (user) {
           user.refreshToken = null;
-          await saveUser(user);
+          await user.save();
         }
 
         // Revoke Redis refresh session

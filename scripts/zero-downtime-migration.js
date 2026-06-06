@@ -14,9 +14,9 @@ const UserStatsSchema = new mongoose.Schema({
 const UserStats = mongoose.model('UserStats_Migration_Example', UserStatsSchema);
 
 async function runMigration() {
-  const mongoUri = process.env.MONGO_URI;
+  const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI;
   if (!mongoUri) {
-    console.log('   [Migration] MONGO_URI not configured. Simulating zero-downtime Expand-Contract migration...');
+    console.log('   [Migration] MONGODB_URI not configured. Simulating zero-downtime Expand-Contract migration...');
     console.log('   ✅ Phase 1 (Expand): Schema updated to support BOTH xp and experiencePoints.');
     console.log('   ✅ Phase 2 (Backfill): Double-writes active. Copies xp to experiencePoints for all historical records.');
     console.log('   ✅ Phase 3 (Contract): Dropped raw legacy xp field after full data validation.');

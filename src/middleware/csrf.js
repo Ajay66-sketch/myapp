@@ -15,6 +15,13 @@ const generateCsrfToken = () => {
  * CSRF Protection Middleware
  */
 const csrfProtection = (req, res, next) => {
+  // Exempt billing webhook endpoints from CSRF validation
+  const isBillingWebhook = (req.originalUrl && (req.originalUrl.includes('/webhook') || req.originalUrl.includes('/billing/webhook'))) ||
+                           (req.path && (req.path.includes('/webhook') || req.path.includes('/billing/webhook')));
+  if (isBillingWebhook) {
+    return next();
+  }
+
   // 1. Skip validation if explicitly disabled in dev mode
   const disableCsrf = process.env.DISABLE_CSRF === 'true';
   
@@ -37,16 +44,32 @@ const csrfProtection = (req, res, next) => {
   const stateChangingMethods = ['POST', 'PUT', 'PATCH', 'DELETE'];
 
   if (stateChangingMethods.includes(req.method) && !disableCsrf) {
-    const csrfHeaderToken = req.headers['x-csrf-token'] || req.headers['x-xsrf-token'];
-    
-    // Validate tokens match
-    if (!csrfCookieToken || !csrfHeaderToken || csrfCookieToken !== csrfHeaderToken) {
-      console.warn(`[Security Warning] CSRF token mismatch/missing on ${req.method} ${req.originalUrl}. Cookie: ${csrfCookieToken ? 'Present' : 'Missing'}, Header: ${csrfHeaderToken ? 'Present' : 'Missing'}`);
-      return res.status(403).json({
-        status: 'error',
-        error: 'CSRF_VALIDATION_FAILED',
-        message: 'Invalid or missing CSRF token'
-      });
+    // Only validate CSRF if the request has auth credentials (JWT Bearer token or accessToken cookie)
+    let hasAuthToken = false;
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      const token = req.headers.authorization.split(' ')[1];
+      if (token && token !== 'undefined' && token !== 'null') {
+        hasAuthToken = true;
+      }
+    } else if (req.cookies && req.cookies.accessToken) {
+      const token = req.cookies.accessToken;
+      if (token && token !== 'undefined' && token !== 'null') {
+        hasAuthToken = true;
+      }
+    }
+
+    if (hasAuthToken) {
+      const csrfHeaderToken = req.headers['x-csrf-token'] || req.headers['x-xsrf-token'];
+      
+      // Validate tokens match
+      if (!csrfCookieToken || !csrfHeaderToken || csrfCookieToken !== csrfHeaderToken) {
+        console.warn(`[Security Warning] CSRF token mismatch/missing on ${req.method} ${req.originalUrl}. Cookie: ${csrfCookieToken ? 'Present' : 'Missing'}, Header: ${csrfHeaderToken ? 'Present' : 'Missing'}`);
+        return res.status(403).json({
+          status: 'error',
+          error: 'CSRF_VALIDATION_FAILED',
+          message: 'Invalid or missing CSRF token'
+        });
+      }
     }
   }
 

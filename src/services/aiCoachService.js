@@ -26,7 +26,7 @@ const _compressHistory = (sessions) => {
 const generateSessionSummary = async (user, recentSessions) => {
   try {
     // If no valid key is provided, return fallback to prevent crashes during demo
-    if (process.env.OPENAI_API_KEY === undefined || process.env.OPENAI_API_KEY === 'dummy_key') {
+    if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === 'dummy_key') {
       return {
         type: 'nudge',
         content: `Amazing work, ${user.username}! You've been maintaining a strong ${user.stats.currentStreak}-day streak. Keep pushing!`

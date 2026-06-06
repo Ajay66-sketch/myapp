@@ -6,9 +6,9 @@ const mongoose = require('mongoose');
 const connectDB = async () => {
   const isProdOrStaging = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
 
-  if (!process.env.MONGO_URI) {
+  if (!process.env.MONGODB_URI) {
     if (isProdOrStaging) {
-      console.error('❌ [FATAL] MONGO_URI is missing in production/staging! Refusing startup to prevent split-brain states.');
+      console.error('❌ [FATAL] MONGODB_URI is missing in production/staging! Refusing startup to prevent split-brain states.');
       process.exit(1);
     }
     console.log('   [MongoDB] Not configured. Starting with local in-memory storage.');
@@ -36,9 +36,12 @@ const connectDB = async () => {
       mongoOptions.autoCreate = true;
     }
 
-    const conn = await mongoose.connect(process.env.MONGO_URI, mongoOptions);
+    const conn = await mongoose.connect(process.env.MONGODB_URI, mongoOptions);
     
     console.log(`   ✅ MongoDB connected: ${conn.connection.host}`);
+
+
+
     return conn.connection.host;
   } catch (error) {
     console.error(`❌ [MongoDB] Connection failed: ${error.message}`);
@@ -52,5 +55,7 @@ const connectDB = async () => {
     return false;
   }
 };
+
+
 
 module.exports = connectDB;

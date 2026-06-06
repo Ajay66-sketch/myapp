@@ -6,7 +6,8 @@
 const { Server } = require('socket.io');
 const { createAdapter } = require('@socket.io/redis-adapter');
 const Redis = require('ioredis');
-const { createRedisClient } = require('./config/redisClient');
+const { getRedisSubClient } = require('./config/redisClient');
+const { getRedisSingleton } = require('./config/redis.singleton');
 
 const prometheus = require('./metrics/prometheus');
 const auth = require('./socket/auth');
@@ -86,38 +87,18 @@ const initSocket = (server) => {
     status.setRedisConnected(false);
     console.log('   [Redis] Vercel mode: distributed adapter disabled for stateless Socket.IO');
   } else {
-    const hasRedisConfig = Boolean(
-      process.env.REDIS_URL || process.env.REDIS_HOST || process.env.REDIS_PORT || process.env.REDIS_MODE
-    );
+    const hasRedisConfig = Boolean(process.env.REDIS_URL);
 
     if (hasRedisConfig) {
       try {
-        const pubClient = createRedisClient();
+        const pubClient = getRedisSingleton();
         redisClientInstance = pubClient;
         const DistributedLock = require('./core/distributedLock');
         DistributedLock.setRedisClient(pubClient);
 
-        pubClient.on('error', (err) => {
-          if (err.code === 'ECONNREFUSED') {
-            console.log('   [Redis] Optional dependency unavailable - continuing in single-node mode');
-            status.setRedisConnected(false);
-            return;
-          }
-          console.error('   [Redis] PubClient Error:', err.message);
-        });
+        // All connection ready/close/error listeners are centralized in redisEventBridge.js
 
-        pubClient.on('ready', () => {
-          status.setRedisConnected(true);
-          console.log('   ✅ Redis connected, Socket.IO adapter configured');
-        });
-
-        const subClient = createRedisClient();
-        subClient.on('error', (err) => {
-          if (err.code === 'ECONNREFUSED') {
-            return;
-          }
-          console.error('   [Redis] SubClient Error:', err.message);
-        });
+        const subClient = getRedisSubClient();
 
         io.adapter(createAdapter(pubClient, subClient));
       } catch (err) {

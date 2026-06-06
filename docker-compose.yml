@@ -45,6 +45,11 @@ services:
       - MONGODB_URI=mongodb://mongodb:27017/ai-study
       - REDIS_URL=redis://:dev-redis-pass@redis:6379
       - JWT_SECRET=production-jwt-super-secret-secure
+      - RAZORPAY_KEY_ID=rzp_production_placeholder_key
+      - RAZORPAY_KEY_SECRET=rzp_production_placeholder_secret
+      - RAZORPAY_WEBHOOK_SECRET=whsec_production_placeholder_secret
+      - RAZORPAY_MONTHLY_PRICE=500
+      - RAZORPAY_YEARLY_PRICE=5000
     ports:
       - "5000:5000"
     depends_on:

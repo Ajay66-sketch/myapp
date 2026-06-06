@@ -49,7 +49,7 @@ export const CancellationPortal: React.FC<CancellationPortalProps> = ({ isOpen, 
   const handleFinalCancel = async () => {
     setLoading(true)
     try {
-      // Simulate Stripe cancellation API request
+      // Simulate Razorpay cancellation API request
       const response = await fetch(`${import.meta.env.VITE_API_URL || '/api'}/billing/cancel`, {
         method: 'POST',
         headers: {

@@ -76,9 +76,21 @@ router.get('/callback', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    // Set authorization cookies
-    res.cookie('accessToken', accessToken, { httpOnly: true, maxAge: 15 * 60 * 1000 });
-    res.cookie('refreshToken', refreshToken, { httpOnly: true, maxAge: 7 * 24 * 60 * 60 * 1000 });
+    // Set authorization cookies with hardened SRE options
+    const isProdOrStaging = process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging';
+    const secureCookie = isProdOrStaging || process.env.COOKIE_SECURE === 'true';
+    const sameSiteSetting = process.env.COOKIE_SAME_SITE || 'strict';
+    const cookieDomain = process.env.COOKIE_DOMAIN || undefined;
+
+    const cookieOptions = {
+      httpOnly: true,
+      secure: secureCookie,
+      sameSite: sameSiteSetting,
+      ...(cookieDomain && { domain: cookieDomain }),
+    };
+
+    res.cookie('accessToken', accessToken, { ...cookieOptions, maxAge: 15 * 60 * 1000 });
+    res.cookie('refreshToken', refreshToken, { ...cookieOptions, maxAge: 7 * 24 * 60 * 60 * 1000 });
 
     return res.json({
       success: true,

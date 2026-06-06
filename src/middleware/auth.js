@@ -14,6 +14,10 @@ const protect = async (req, res, next) => {
     token = req.cookies.accessToken;
   }
 
+  if (token && typeof token === 'string' && (token === 'undefined' || token === 'null' || token.toLowerCase() === 'undefined' || token.toLowerCase() === 'null')) {
+    token = null;
+  }
+
   if (!token) {
     return res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
   }
@@ -53,12 +57,23 @@ const protect = async (req, res, next) => {
 
     next();
   } catch (error) {
-    console.error('JWT verification failed:', error.message);
-
     if (error.name === 'TokenExpiredError') {
+      console.warn(`[AUTH] JWT expired: ${error.message}. Expiry time: ${error.expiredAt}`);
       return res.status(401).json({ error: 'TOKEN_EXPIRED', message: 'Access token has expired' });
     }
 
+    if (error.name === 'JsonWebTokenError') {
+      if (error.message === 'invalid signature') {
+        console.error(`[AUTH] JWT invalid signature: ${error.message}`);
+      } else if (error.message === 'jwt malformed') {
+        console.error(`[AUTH] JWT malformed token structure: ${error.message}`);
+      } else {
+        console.error(`[AUTH] JWT verification error: ${error.message}`);
+      }
+      return res.status(401).json({ error: 'INVALID_TOKEN', message: 'Not authorized — invalid token' });
+    }
+
+    console.error('JWT verification failed with unexpected error:', error.message);
     return res.status(401).json({ error: 'INVALID_TOKEN', message: 'Not authorized — invalid token' });
   }
 };

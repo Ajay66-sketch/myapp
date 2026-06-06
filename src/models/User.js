@@ -57,11 +57,15 @@ const userSchema = new mongoose.Schema(
     },
     tier: {
       type: String,
-      enum: ['free', 'pro', 'admin', 'premium'],
+      enum: ['free', 'pro', 'admin', 'premium', 'grace_period'],
       default: 'free',
     },
-    stripeCustomerId: {
-      type: String,
+
+    billing: {
+      provider: { type: String, default: 'free' },
+      customerId: { type: String, default: null },
+      subscriptionId: { type: String, default: null },
+      status: { type: String, default: null }
     },
     xp: {
       type: Number,
@@ -126,16 +130,30 @@ const userSchema = new mongoose.Schema(
 // ─── Pre-save Hook: Hash password before saving ───────────────────────────────
 userSchema.pre('save', async function (next) {
   // Only hash if the password field was modified (or is new)
-  if (!this.isModified('password')) return next();
+  if (!this.isModified('password')) {
+    if (typeof next === 'function') next();
+    return;
+  }
+
+  // If already a bcrypt hash, don't double-hash
+  if (this.password && /^\$2[aby]\$.{56}$/.test(this.password)) {
+    if (typeof next === 'function') next();
+    return;
+  }
 
   try {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
-    next();
+    if (typeof next === 'function') next();
   } catch (error) {
-    next(error);
+    if (typeof next === 'function') {
+      next(error);
+    } else {
+      throw error;
+    }
   }
 });
+
 
 // ─── Instance Method: Compare password ───────────────────────────────────────
 userSchema.methods.comparePassword = async function (candidatePassword) {
@@ -153,6 +171,13 @@ userSchema.methods.toSafeObject = function () {
     onboardingCompleted: this.onboardingCompleted,
     isOnline: this.isOnline,
     tier: this.tier,
+
+    billing: this.billing || {
+      provider: 'free',
+      customerId: null,
+      subscriptionId: null,
+      status: null
+    },
     xp: this.xp,
     level: this.level,
     badges: this.badges,
